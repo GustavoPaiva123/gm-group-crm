@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gm-group-crm",
+  // Data de hoje — o Cloudflare pede uma "compatibility date" fixa para
+  // garantir que o comportamento do runtime não mude sozinho no futuro.
+  "compatibility_date": "2026-07-17",
+  "assets": {
+    "directory": "./dist",
+    // Toda rota não encontrada cai no index.html — necessário porque este
+    // é um app de página única (SPA); a navegação entre telas acontece
+    // dentro do React, não como URLs separadas.
+    "not_found_handling": "single-page-application"
+  }
+}
