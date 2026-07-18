@@ -214,6 +214,117 @@ export async function fetchPerfilPorEmail(email) {
   return data;
 }
 
+/* ------------------------------------------------------------------ */
+/*  CRIAR LEAD                                                          */
+/* ------------------------------------------------------------------ */
+
+export async function criarLead({
+  empresa, contato, whatsapp, instagram, email, cidade, estado,
+  segmento, origem, valorEstimado, observacoes, servicoIds,
+}) {
+  const { data: lead, error } = await supabase
+    .from("leads")
+    .insert({
+      empresa, contato,
+      whatsapp: whatsapp || null,
+      instagram: instagram || null,
+      email: email || null,
+      cidade: cidade || null,
+      estado: estado || null,
+      segmento: segmento || null,
+      origem: origem || null,
+      valor_estimado: valorEstimado === "" || valorEstimado == null ? null : Number(valorEstimado),
+      observacoes: observacoes || null,
+      status: "novo",
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  if (servicoIds && servicoIds.length) {
+    const { error: servErr } = await supabase
+      .from("lead_servicos")
+      .insert(servicoIds.map((servico_id) => ({ lead_id: lead.id, servico_id })));
+    if (servErr) throw servErr;
+  }
+
+  await supabase.from("timeline_eventos").insert({
+    lead_id: lead.id,
+    tipo: "Lead criado",
+    descricao: "Lead cadastrado manualmente no CRM.",
+  });
+
+  return lead.id;
+}
+
+/* ------------------------------------------------------------------ */
+/*  BRIEFING DE DESCOBERTA                                              */
+/* ------------------------------------------------------------------ */
+
+export async function fetchBriefingsByLead(leadId) {
+  const { data, error } = await supabase
+    .from("briefings")
+    .select("*, usuarios(nome)")
+    .eq("lead_id", leadId)
+    .order("created_at", { ascending: false });
+
+  if (error) throw error;
+
+  return data.map((row) => ({
+    id: row.id,
+    contatoCargo: row.contato_cargo ?? "",
+    linhaServico: row.linha_servico ?? [],
+    problemaPrincipal: row.problema_principal ?? "",
+    situacaoAtual: row.situacao_atual ?? "",
+    objetivoEsperado: row.objetivo_esperado ?? "",
+    quemVaiUsar: row.quem_vai_usar ?? "",
+    integracoesCitadas: row.integracoes_citadas ?? "",
+    referencias: row.referencias ?? "",
+    prazoDesejado: row.prazo_desejado ?? "",
+    orcamentoFaixa: row.orcamento_faixa ?? "",
+    decisores: row.decisores ?? "",
+    redFlags: row.red_flags ?? [],
+    observacoesLivres: row.observacoes_livres ?? "",
+    criadoPor: row.usuarios?.nome ?? null,
+    criadoEm: fmtData(row.created_at),
+  }));
+}
+
+export async function criarBriefing({ leadId, ...campos }) {
+  const { data: userRes } = await supabase.auth.getUser();
+  let criadoPorId = null;
+  if (userRes?.user?.email) {
+    const perfil = await supabase.from("usuarios").select("id").eq("email", userRes.user.email).maybeSingle();
+    criadoPorId = perfil.data?.id ?? null;
+  }
+
+  const { error } = await supabase.from("briefings").insert({
+    lead_id: leadId,
+    contato_cargo: campos.contatoCargo || null,
+    linha_servico: campos.linhaServico?.length ? campos.linhaServico : null,
+    problema_principal: campos.problemaPrincipal || null,
+    situacao_atual: campos.situacaoAtual || null,
+    objetivo_esperado: campos.objetivoEsperado || null,
+    quem_vai_usar: campos.quemVaiUsar || null,
+    integracoes_citadas: campos.integracoesCitadas || null,
+    referencias: campos.referencias || null,
+    prazo_desejado: campos.prazoDesejado || null,
+    orcamento_faixa: campos.orcamentoFaixa || null,
+    decisores: campos.decisores || null,
+    red_flags: campos.redFlags?.length ? campos.redFlags : null,
+    observacoes_livres: campos.observacoesLivres || null,
+    criado_por: criadoPorId,
+  });
+  if (error) throw error;
+
+  await supabase.from("timeline_eventos").insert({
+    lead_id: leadId,
+    tipo: "Briefing de descoberta preenchido",
+    descricao: campos.problemaPrincipal ? `Dor principal: ${campos.problemaPrincipal}` : "Briefing de descoberta registrado.",
+  });
+}
+
 export async function converterLeadEmCliente({
   leadId,
   nome,

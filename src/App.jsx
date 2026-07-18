@@ -4,12 +4,14 @@ import {
   Search, Bell, Plus, ChevronLeft, ChevronRight, Phone, AtSign, MapPin,
   Calendar, MessageCircle, CheckCircle2, AlertTriangle, TrendingUp,
   ArrowUpRight, X, Menu, ArrowLeft, Mail, Briefcase, Tag, MoreHorizontal,
-  DollarSign, Sparkles, Loader2, LogOut, Lock
+  DollarSign, Sparkles, Loader2, LogOut, Lock,
+  ClipboardList, Target, Layers, UserCheck, Link2
 } from "lucide-react";
 import {
   fetchLeads, fetchClientes, fetchPropostas, fetchFollowUps,
   fetchTimelineByLead, fetchAtividadeRecente, fetchServicos,
   concluirFollowUp, converterLeadEmCliente, fetchPerfilPorEmail,
+  criarLead, fetchBriefingsByLead, criarBriefing,
 } from "./lib/api";
 import { useAuth } from "./lib/AuthContext";
 
@@ -39,6 +41,24 @@ const NAV_ITEMS = [
 ];
 
 const fmtBRL = (n) => n.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
+
+// Linhas de serviço do Catálogo GM Group (Parte 1 do manual)
+const LINHAS_SERVICO = [
+  "Marketing & Tráfego Pago",
+  "Desenvolvimento de Sistemas",
+  "Inteligência Artificial",
+  "Automação de Processos",
+];
+
+// Sinais de alerta do Manual de Levantamento (seção 7)
+const RED_FLAGS = [
+  "\"É rapidinho, simples.\"",
+  "Não sabe dizer o objetivo",
+  "Quer começar \"pra ontem\" sem orçamento",
+  "Compara só por preço",
+  "Muitos decisores ocultos",
+  "Escopo que cresce a cada frase",
+];
 
 /* ------------------------------------------------------------------ */
 /*  STYLES                                                             */
@@ -468,7 +488,7 @@ function Avatar({ name }) {
 /*  DASHBOARD                                                           */
 /* ------------------------------------------------------------------ */
 
-function Dashboard({ leads, clientes, followUps, recentActivity, onOpenLead, goTo }) {
+function Dashboard({ leads, clientes, followUps, recentActivity, nomeExibicao, onOpenLead, goTo }) {
   const novos = leads.filter((l) => l.status === "novo").length;
   const negociacao = leads.filter((l) => l.status === "negociacao").length;
   const propostasEnviadas = leads.filter((l) => l.status === "proposta").length;
@@ -488,14 +508,18 @@ function Dashboard({ leads, clientes, followUps, recentActivity, onOpenLead, goT
     .filter((f) => f.status === "pendente")
     .sort((a, b) => (a.dataHora?.getTime() ?? 0) - (b.dataHora?.getTime() ?? 0));
 
-  const hoje = new Date().toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" });
+  const agora = new Date();
+  const hoje = agora.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" });
+  const hora = agora.getHours();
+  const saudacao = hora < 12 ? "Bom dia" : hora < 18 ? "Boa tarde" : "Boa noite";
+  const primeiroNome = (nomeExibicao || "").trim().split(" ")[0] || nomeExibicao;
 
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
           <p className="gm-eyebrow">{hoje}</p>
-          <h1 style={{ fontSize: 24, marginTop: 4 }}>Bom dia, Gustavo</h1>
+          <h1 style={{ fontSize: 24, marginTop: 4 }}>{saudacao}, {primeiroNome}</h1>
           <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>
             Aqui está o panorama comercial da GM Group hoje.
           </p>
@@ -606,7 +630,9 @@ function StatCard({ icon, label, value, delta, warn }) {
 /*  LEADS (KANBAN)                                                      */
 /* ------------------------------------------------------------------ */
 
-function LeadsBoard({ leads, onOpenLead }) {
+function LeadsBoard({ leads, servicosCatalog, onOpenLead, onLeadCreated }) {
+  const [modalOpen, setModalOpen] = useState(false);
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -614,8 +640,16 @@ function LeadsBoard({ leads, onOpenLead }) {
           <h1 style={{ fontSize: 22 }}>Leads</h1>
           <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>{leads.length} leads no funil comercial</p>
         </div>
-        <button className="gm-btn gm-btn-primary"><Plus size={15} /> Novo lead</button>
+        <button className="gm-btn gm-btn-primary" onClick={() => setModalOpen(true)}><Plus size={15} /> Novo lead</button>
       </div>
+
+      {modalOpen && (
+        <NovoLeadModal
+          servicosCatalog={servicosCatalog}
+          onClose={() => setModalOpen(false)}
+          onCreated={(id) => { setModalOpen(false); onLeadCreated(id); }}
+        />
+      )}
 
       <div className="gm-kanban">
         {STAGES.map((stage) => {
@@ -650,11 +684,164 @@ function LeadsBoard({ leads, onOpenLead }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  MODAL — Novo lead                                                   */
+/* ------------------------------------------------------------------ */
+
+function NovoLeadModal({ servicosCatalog, onClose, onCreated }) {
+  const [form, setForm] = useState({
+    empresa: "", contato: "", whatsapp: "", instagram: "", email: "",
+    cidade: "", estado: "", segmento: "", origem: "", valorEstimado: "",
+    observacoes: "", servicoIds: [],
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
+  const toggleServico = (id) => {
+    setForm((f) => ({
+      ...f,
+      servicoIds: f.servicoIds.includes(id) ? f.servicoIds.filter((s) => s !== id) : [...f.servicoIds, id],
+    }));
+  };
+
+  const handleSubmit = async () => {
+    if (!form.empresa.trim() || !form.contato.trim()) {
+      setError("Preencha ao menos o nome da empresa e do contato.");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const leadId = await criarLead(form);
+      onCreated(leadId);
+    } catch (err) {
+      setError(err.message || "Não foi possível criar o lead. Tente novamente.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(10,23,48,0.45)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20,
+    }}>
+      <div className="gm-card" style={{ width: 560, maxWidth: "100%", maxHeight: "88vh", overflowY: "auto", padding: 26 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+          <div>
+            <p className="gm-eyebrow">Novo lead</p>
+            <h2 style={{ fontSize: 18, marginTop: 4 }}>Cadastrar novo lead</h2>
+          </div>
+          <button className="gm-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div className="gm-info-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Nome da empresa *</div>
+              <input className="gm-input" value={form.empresa} onChange={set("empresa")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Nome do contato *</div>
+              <input className="gm-input" value={form.contato} onChange={set("contato")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>WhatsApp</div>
+              <input className="gm-input" value={form.whatsapp} onChange={set("whatsapp")} placeholder="(11) 90000-0000" />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Instagram</div>
+              <input className="gm-input" value={form.instagram} onChange={set("instagram")} placeholder="@empresa" />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>E-mail</div>
+              <input className="gm-input" type="email" value={form.email} onChange={set("email")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Cidade</div>
+              <input className="gm-input" value={form.cidade} onChange={set("cidade")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Estado (UF)</div>
+              <input className="gm-input" maxLength={2} value={form.estado} onChange={(e) => setForm((f) => ({ ...f, estado: e.target.value.toUpperCase() }))} placeholder="SP" />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Segmento</div>
+              <input className="gm-input" value={form.segmento} onChange={set("segmento")} placeholder="Ex.: Saúde, Varejo..." />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Origem do lead</div>
+              <input className="gm-input" value={form.origem} onChange={set("origem")} placeholder="Indicação, Instagram Ads..." />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Valor estimado (R$)</div>
+              <input className="gm-input" type="number" min="0" step="100" value={form.valorEstimado} onChange={set("valorEstimado")} />
+            </div>
+          </div>
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 6 }}>Serviços de interesse</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {servicosCatalog.map((s) => {
+                const active = form.servicoIds.includes(s.id);
+                return (
+                  <span
+                    key={s.id}
+                    onClick={() => toggleServico(s.id)}
+                    className={`gm-badge ${active ? "gm-badge-blue" : "gm-badge-gray"}`}
+                    style={{ cursor: "pointer", userSelect: "none" }}
+                  >
+                    {active && <CheckCircle2 size={11} />} {s.nome}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Observações</div>
+            <textarea className="gm-input" rows={3} value={form.observacoes} onChange={set("observacoes")} style={{ resize: "vertical", fontFamily: "inherit" }} />
+          </div>
+
+          {error && (
+            <div style={{ fontSize: 12.5, color: "var(--danger)", background: "var(--danger-tint)", padding: "8px 10px", borderRadius: 8 }}>
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+            <button className="gm-btn gm-btn-ghost" onClick={onClose} disabled={submitting}>Cancelar</button>
+            <button className="gm-btn gm-btn-primary" onClick={handleSubmit} disabled={submitting}>
+              {submitting ? <Loader2 size={14} className="gm-spin" /> : <Plus size={14} />}
+              {submitting ? "Criando..." : "Criar lead"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  LEAD DETAIL                                                         */
 /* ------------------------------------------------------------------ */
 
 function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicosCatalog, onBack, onConverted }) {
   const [modalOpen, setModalOpen] = useState(false);
+  const [briefingModalOpen, setBriefingModalOpen] = useState(false);
+  const [briefings, setBriefings] = useState([]);
+  const [briefingsLoading, setBriefingsLoading] = useState(true);
+
+  const carregarBriefings = useCallback(() => {
+    if (!lead) return;
+    setBriefingsLoading(true);
+    fetchBriefingsByLead(lead.id)
+      .then(setBriefings)
+      .catch(() => setBriefings([]))
+      .finally(() => setBriefingsLoading(false));
+  }, [lead?.id]);
+
+  useEffect(() => { carregarBriefings(); }, [carregarBriefings]);
 
   if (!lead) return null;
 
@@ -675,7 +862,9 @@ function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicos
           <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>{lead.contato} · {lead.segmento} · {lead.cidade}</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="gm-btn gm-btn-ghost"><MessageCircle size={14} /> WhatsApp</button>
+          <button className="gm-btn gm-btn-ghost" onClick={() => setBriefingModalOpen(true)}>
+            <ClipboardList size={14} /> Briefing de descoberta
+          </button>
           {podeConverter && !jaConvertido && (
             <button className="gm-btn gm-btn-primary" onClick={() => setModalOpen(true)}>
               <Building2 size={14} /> Converter em cliente
@@ -730,6 +919,65 @@ function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicos
         </div>
       </div>
 
+      <div style={{ marginTop: 22 }}>
+        <div className="gm-section-title" style={{ marginTop: 0 }}>
+          <h2 style={{ fontSize: 15 }}>Briefings de descoberta</h2>
+          <span className="gm-eyebrow" style={{ cursor: "pointer" }} onClick={() => setBriefingModalOpen(true)}>+ novo briefing</span>
+        </div>
+
+        {briefingsLoading && <p style={{ fontSize: 12.5, color: "var(--text-faint)" }}>Carregando…</p>}
+        {!briefingsLoading && briefings.length === 0 && (
+          <div className="gm-card" style={{ padding: 18, fontSize: 12.5, color: "var(--text-faint)" }}>
+            Nenhum briefing preenchido ainda. Use o botão "Briefing de descoberta" após a reunião com o cliente.
+          </div>
+        )}
+        {briefings.map((b) => (
+          <div className="gm-card" key={b.id} style={{ padding: 20, marginBottom: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {b.linhaServico.map((l) => <span key={l} className="gm-badge gm-badge-blue">{l}</span>)}
+              </div>
+              <span className="gm-eyebrow">{b.criadoEm}{b.criadoPor ? ` · ${b.criadoPor}` : ""}</span>
+            </div>
+
+            {b.problemaPrincipal && (
+              <div style={{ marginBottom: 10 }}>
+                <div className="gm-info-label">Problema / dor principal</div>
+                <div style={{ fontSize: 13.5, fontWeight: 600, marginTop: 2 }}>{b.problemaPrincipal}</div>
+              </div>
+            )}
+
+            <div className="gm-info-grid">
+              <InfoItem icon={<Users size={14} />} label="Contato e cargo" value={b.contatoCargo || "—"} />
+              <InfoItem icon={<Target size={14} />} label="Objetivo esperado" value={b.objetivoEsperado || "—"} />
+              <InfoItem icon={<Layers size={14} />} label="Situação atual" value={b.situacaoAtual || "—"} />
+              <InfoItem icon={<UserCheck size={14} />} label="Quem vai usar" value={b.quemVaiUsar || "—"} />
+              <InfoItem icon={<Link2 size={14} />} label="Integrações citadas" value={b.integracoesCitadas || "—"} />
+              <InfoItem icon={<Sparkles size={14} />} label="Referências" value={b.referencias || "—"} />
+              <InfoItem icon={<Calendar size={14} />} label="Prazo desejado" value={b.prazoDesejado || "—"} />
+              <InfoItem icon={<DollarSign size={14} />} label="Orçamento / faixa" value={b.orcamentoFaixa || "—"} />
+              <InfoItem icon={<Users size={14} />} label="Decisores" value={b.decisores || "—"} />
+            </div>
+
+            {b.redFlags.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <div className="gm-info-label" style={{ marginBottom: 5 }}>Sinais de alerta</div>
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                  {b.redFlags.map((f) => <span key={f} className="gm-badge gm-badge-warning"><AlertTriangle size={10} /> {f}</span>)}
+                </div>
+              </div>
+            )}
+
+            {b.observacoesLivres && (
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+                <div className="gm-info-label">Observações livres</div>
+                <p style={{ fontSize: 13, marginTop: 4, lineHeight: 1.5 }}>{b.observacoesLivres}</p>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
       {modalOpen && (
         <ConverterEmClienteModal
           lead={lead}
@@ -739,6 +987,14 @@ function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicos
             setModalOpen(false);
             onConverted(clienteId);
           }}
+        />
+      )}
+
+      {briefingModalOpen && (
+        <BriefingModal
+          lead={lead}
+          onClose={() => setBriefingModalOpen(false)}
+          onCreated={() => { setBriefingModalOpen(false); carregarBriefings(); }}
         />
       )}
     </div>
@@ -870,6 +1126,157 @@ function ConverterEmClienteModal({ lead, servicosCatalog, onClose, onConverted }
             <button className="gm-btn gm-btn-primary" onClick={handleConfirm} disabled={submitting}>
               {submitting ? <Loader2 size={14} className="gm-spin" /> : <CheckCircle2 size={14} />}
               {submitting ? "Convertendo..." : "Confirmar conversão"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  MODAL — Briefing de descoberta (Template de briefing do manual)     */
+/* ------------------------------------------------------------------ */
+
+function BriefingModal({ lead, onClose, onCreated }) {
+  const [form, setForm] = useState({
+    contatoCargo: "", linhaServico: [], problemaPrincipal: "", situacaoAtual: "",
+    objetivoEsperado: "", quemVaiUsar: "", integracoesCitadas: "", referencias: "",
+    prazoDesejado: "", orcamentoFaixa: "", decisores: "", redFlags: [], observacoesLivres: "",
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
+  const toggle = (field, value) => {
+    setForm((f) => ({
+      ...f,
+      [field]: f[field].includes(value) ? f[field].filter((v) => v !== value) : [...f[field], value],
+    }));
+  };
+
+  const handleSubmit = async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await criarBriefing({ leadId: lead.id, ...form });
+      onCreated();
+    } catch (err) {
+      setError(err.message || "Não foi possível salvar o briefing. Tente novamente.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(10,23,48,0.45)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20,
+    }}>
+      <div className="gm-card" style={{ width: 640, maxWidth: "100%", maxHeight: "90vh", overflowY: "auto", padding: 26 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+          <div>
+            <p className="gm-eyebrow">Briefing de descoberta · {lead.empresa}</p>
+            <h2 style={{ fontSize: 18, marginTop: 4 }}>Registrar reunião de descoberta</h2>
+          </div>
+          <button className="gm-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+        <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 6, marginBottom: 18 }}>
+          Capture o que o cliente falou — quem escopa é o desenvolvimento. Campo em branco é só uma pergunta a mais que vai faltar depois.
+        </p>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Contato e cargo (quem falou e se decide)</div>
+            <input className="gm-input" value={form.contatoCargo} onChange={set("contatoCargo")} placeholder="Ex.: Maria, sócia — decide sozinha" />
+          </div>
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 6 }}>Linha de serviço (pode marcar mais de uma)</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {LINHAS_SERVICO.map((l) => {
+                const active = form.linhaServico.includes(l);
+                return (
+                  <span key={l} onClick={() => toggle("linhaServico", l)} className={`gm-badge ${active ? "gm-badge-blue" : "gm-badge-gray"}`} style={{ cursor: "pointer", userSelect: "none" }}>
+                    {active && <CheckCircle2 size={11} />} {l}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Problema / dor principal — em uma frase</div>
+            <textarea className="gm-input" rows={2} value={form.problemaPrincipal} onChange={set("problemaPrincipal")} style={{ resize: "vertical", fontFamily: "inherit" }} />
+          </div>
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Situação atual — como fazem hoje + ferramentas usadas</div>
+            <textarea className="gm-input" rows={2} value={form.situacaoAtual} onChange={set("situacaoAtual")} style={{ resize: "vertical", fontFamily: "inherit" }} />
+          </div>
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Objetivo esperado — como é o "certo" e como medem sucesso</div>
+            <textarea className="gm-input" rows={2} value={form.objetivoEsperado} onChange={set("objetivoEsperado")} style={{ resize: "vertical", fontFamily: "inherit" }} />
+          </div>
+
+          <div className="gm-info-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Quem vai usar</div>
+              <input className="gm-input" value={form.quemVaiUsar} onChange={set("quemVaiUsar")} placeholder="Clientes finais / equipe / ambos + quantidade" />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Integrações citadas</div>
+              <input className="gm-input" value={form.integracoesCitadas} onChange={set("integracoesCitadas")} placeholder="Sistemas que precisam conversar" />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Referências</div>
+              <input className="gm-input" value={form.referencias} onChange={set("referencias")} placeholder="Sites, apps, concorrentes citados" />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Prazo desejado</div>
+              <input className="gm-input" value={form.prazoDesejado} onChange={set("prazoDesejado")} placeholder="Data ou gatilho mencionado" />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Orçamento / faixa</div>
+              <input className="gm-input" value={form.orcamentoFaixa} onChange={set("orcamentoFaixa")} placeholder="Valor reservado ou reação às âncoras" />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Decisores</div>
+              <input className="gm-input" value={form.decisores} onChange={set("decisores")} placeholder="Todos que participam da decisão" />
+            </div>
+          </div>
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 6 }}>Sinais de alerta percebidos</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {RED_FLAGS.map((f) => {
+                const active = form.redFlags.includes(f);
+                return (
+                  <span key={f} onClick={() => toggle("redFlags", f)} className={`gm-badge ${active ? "gm-badge-warning" : "gm-badge-gray"}`} style={{ cursor: "pointer", userSelect: "none" }}>
+                    {active && <AlertTriangle size={11} />} {f}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Observações livres</div>
+            <textarea className="gm-input" rows={3} value={form.observacoesLivres} onChange={set("observacoesLivres")} style={{ resize: "vertical", fontFamily: "inherit" }} />
+          </div>
+
+          {error && (
+            <div style={{ fontSize: 12.5, color: "var(--danger)", background: "var(--danger-tint)", padding: "8px 10px", borderRadius: 8 }}>
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+            <button className="gm-btn gm-btn-ghost" onClick={onClose} disabled={submitting}>Cancelar</button>
+            <button className="gm-btn gm-btn-primary" onClick={handleSubmit} disabled={submitting}>
+              {submitting ? <Loader2 size={14} className="gm-spin" /> : <ClipboardList size={14} />}
+              {submitting ? "Salvando..." : "Salvar briefing"}
             </button>
           </div>
         </div>
@@ -1237,6 +1644,12 @@ export default function App() {
     setClientes(clientesData);
   };
 
+  const handleLeadCreated = async (novoLeadId) => {
+    const leadsData = await fetchLeads();
+    setLeads(leadsData);
+    openLead(novoLeadId);
+  };
+
   const activeNavKey = view === "leadDetail" ? "leads" : view;
 
   if (authLoading) {
@@ -1333,9 +1746,11 @@ export default function App() {
 
         <div className="gm-content">
           {view === "dashboard" && (
-            <Dashboard leads={leads} clientes={clientes} followUps={followUps} recentActivity={recentActivity} onOpenLead={openLead} goTo={goTo} />
+            <Dashboard leads={leads} clientes={clientes} followUps={followUps} recentActivity={recentActivity} nomeExibicao={perfil?.nome || user.email} onOpenLead={openLead} goTo={goTo} />
           )}
-          {view === "leads" && <LeadsBoard leads={leads} onOpenLead={openLead} />}
+          {view === "leads" && (
+            <LeadsBoard leads={leads} servicosCatalog={servicosCatalog} onOpenLead={openLead} onLeadCreated={handleLeadCreated} />
+          )}
           {view === "leadDetail" && (
             <LeadDetail
               lead={selectedLead}
