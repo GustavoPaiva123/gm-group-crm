@@ -38,6 +38,13 @@ export default defineConfig({
       },
 
       workbox: {
+        // Sem isso, um deploy novo fica "esperando" todas as abas do app
+        // fecharem antes de assumir — na prática, parece que o app não
+        // atualizou mesmo depois de publicado. Com isso, a versão nova
+        // assume assim que a página é recarregada.
+        skipWaiting: true,
+        clientsClaim: true,
+
         // Pré-cacheia só o app shell (HTML/JS/CSS/ícones). As chamadas ao
         // Supabase (outra origem) NÃO são cacheadas — o CRM precisa sempre
         // de dados atuais, nunca de uma versão antiga guardada offline.
