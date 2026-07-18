@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   LayoutDashboard, Users, Rows3, Clock, FileText, Building2, Settings,
-  Search, Bell, Plus, ChevronLeft, ChevronRight, Phone, AtSign, MapPin,
+  Search, Bell, Plus, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, Phone, AtSign, MapPin,
   Calendar, MessageCircle, CheckCircle2, AlertTriangle, TrendingUp,
   ArrowUpRight, X, Menu, ArrowLeft, Mail, Briefcase, Tag, MoreHorizontal,
   DollarSign, Sparkles, Loader2, LogOut, Lock,
@@ -12,6 +12,7 @@ import {
   fetchTimelineByLead, fetchAtividadeRecente, fetchServicos,
   concluirFollowUp, converterLeadEmCliente, fetchPerfilPorEmail,
   criarLead, fetchBriefingsByLead, criarBriefing, criarCliente, criarProposta,
+  fetchStages, criarStage, atualizarStage, moverStage, excluirStage,
 } from "./lib/api";
 import { useAuth } from "./lib/AuthContext";
 
@@ -19,16 +20,8 @@ import { useAuth } from "./lib/AuthContext";
 /*  CONFIGURAÇÃO DE UI (estático — não vem do banco)                    */
 /* ------------------------------------------------------------------ */
 
-const STAGES = [
-  { key: "novo", label: "Novo lead" },
-  { key: "primeiro_contato", label: "Primeiro contato" },
-  { key: "respondeu", label: "Respondeu" },
-  { key: "reuniao", label: "Reunião" },
-  { key: "proposta", label: "Proposta enviada" },
-  { key: "negociacao", label: "Negociação" },
-  { key: "fechado", label: "Fechado" },
-  { key: "perdido", label: "Perdido" },
-];
+// As etapas do funil (STAGES) não são mais fixas aqui — vêm do banco via
+// fetchStages(), editáveis em Configurações > Pipeline.
 
 
 const NAV_ITEMS = [
@@ -492,19 +485,15 @@ function Login() {
 /*  SHARED BITS                                                        */
 /* ------------------------------------------------------------------ */
 
-function stageBadge(status) {
-  const map = {
-    novo: { cls: "gm-badge-blue", label: "Novo lead" },
-    primeiro_contato: { cls: "gm-badge-blue", label: "Primeiro contato" },
-    respondeu: { cls: "gm-badge-blue", label: "Respondeu" },
-    reuniao: { cls: "gm-badge-warning", label: "Reunião" },
-    proposta: { cls: "gm-badge-warning", label: "Proposta enviada" },
-    negociacao: { cls: "gm-badge-warning", label: "Negociação" },
-    fechado: { cls: "gm-badge-success", label: "Fechado" },
-    perdido: { cls: "gm-badge-danger", label: "Perdido" },
-  };
-  const m = map[status] || { cls: "gm-badge-gray", label: status };
-  return <span className={`gm-badge ${m.cls}`}>{m.label}</span>;
+const CORES_BADGE = {
+  gray: "gm-badge-gray", blue: "gm-badge-blue", warning: "gm-badge-warning",
+  success: "gm-badge-success", danger: "gm-badge-danger",
+};
+
+function stageBadge(stage) {
+  if (!stage) return <span className="gm-badge gm-badge-gray">—</span>;
+  const cls = CORES_BADGE[stage.cor] || "gm-badge-gray";
+  return <span className={`gm-badge ${cls}`}>{stage.nome}</span>;
 }
 
 function Avatar({ name }) {
@@ -562,7 +551,7 @@ function TopbarSearch({ leads, clientes, onOpenLead, goTo }) {
                     <div style={{ fontSize: 13, fontWeight: 600 }}>{l.empresa}</div>
                     <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>{l.contato}</div>
                   </div>
-                  {stageBadge(l.status)}
+                  {stageBadge(l.stage)}
                 </div>
               ))}
             </>
@@ -652,19 +641,19 @@ function NotificationsBell({ followUps, onOpenLead, goTo }) {
 /*  DASHBOARD                                                           */
 /* ------------------------------------------------------------------ */
 
-function Dashboard({ leads, clientes, followUps, recentActivity, nomeExibicao, onOpenLead, goTo }) {
-  const novos = leads.filter((l) => l.status === "novo").length;
-  const negociacao = leads.filter((l) => l.status === "negociacao").length;
-  const propostasEnviadas = leads.filter((l) => l.status === "proposta").length;
+function Dashboard({ leads, clientes, followUps, recentActivity, stages, nomeExibicao, onOpenLead, goTo }) {
+  const novos = leads.filter((l) => l.stage?.chave === "novo").length;
+  const negociacao = leads.filter((l) => l.stage?.chave === "negociacao").length;
+  const propostasEnviadas = leads.filter((l) => l.stage?.chave === "proposta").length;
   const clientesAtivos = clientes.filter((c) => c.status === "Ativo").length;
   const clientesEmRisco = clientes.filter((c) => c.status === "Em risco").length;
   const valorTotalNegociacao = leads
-    .filter((l) => !["fechado", "perdido"].includes(l.status))
+    .filter((l) => !l.stage?.eFechamento && !l.stage?.ePerda)
     .reduce((sum, l) => sum + l.valor, 0);
 
-  const funnel = STAGES.filter((s) => s.key !== "perdido").map((s) => ({
+  const funnel = stages.filter((s) => !s.ePerda).map((s) => ({
     ...s,
-    count: leads.filter((l) => l.status === s.key).length,
+    count: leads.filter((l) => l.stageId === s.id).length,
   }));
   const maxCount = Math.max(...funnel.map((f) => f.count), 1);
 
@@ -714,8 +703,8 @@ function Dashboard({ leads, clientes, followUps, recentActivity, nomeExibicao, o
           </div>
           <div className="gm-card gm-funnel">
             {funnel.map((f) => (
-              <div className="gm-funnel-row" key={f.key}>
-                <div className="gm-funnel-label">{f.label}</div>
+              <div className="gm-funnel-row" key={f.id}>
+                <div className="gm-funnel-label">{f.nome}</div>
                 <div className="gm-funnel-track">
                   <div className="gm-funnel-fill" style={{ width: `${(f.count / maxCount) * 100}%` }} />
                 </div>
@@ -746,7 +735,7 @@ function Dashboard({ leads, clientes, followUps, recentActivity, nomeExibicao, o
                     <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Follow-up: {f.dataHoraFmt}</div>
                   </div>
                 </div>
-                {f.leadStatus ? stageBadge(f.leadStatus) : <span className="gm-badge gm-badge-gray">Cliente</span>}
+                {f.leadStage ? stageBadge(f.leadStage) : <span className="gm-badge gm-badge-gray">Cliente</span>}
               </div>
             ))}
           </div>
@@ -794,7 +783,7 @@ function StatCard({ icon, label, value, delta, warn }) {
 /*  LEADS (KANBAN)                                                      */
 /* ------------------------------------------------------------------ */
 
-function LeadsBoard({ leads, servicosCatalog, onOpenLead, onLeadCreated }) {
+function LeadsBoard({ leads, stages, servicosCatalog, onOpenLead, onLeadCreated }) {
   const [modalOpen, setModalOpen] = useState(false);
 
   return (
@@ -816,12 +805,12 @@ function LeadsBoard({ leads, servicosCatalog, onOpenLead, onLeadCreated }) {
       )}
 
       <div className="gm-kanban">
-        {STAGES.map((stage) => {
-          const items = leads.filter((l) => l.status === stage.key);
+        {stages.map((stage) => {
+          const items = leads.filter((l) => l.stageId === stage.id);
           return (
-            <div className="gm-kanban-col" key={stage.key}>
+            <div className="gm-kanban-col" key={stage.id}>
               <div className="gm-kanban-col-head">
-                <span className="gm-kanban-col-title">{stage.label}</span>
+                <span className="gm-kanban-col-title">{stage.nome}</span>
                 <span className="gm-kanban-col-count">{items.length}</span>
               </div>
               <div className="gm-kanban-cards">
@@ -1010,7 +999,7 @@ function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicos
   if (!lead) return null;
 
   const jaConvertido = Boolean(lead.convertidoEmClienteId);
-  const podeConverter = lead.status === "fechado";
+  const podeConverter = Boolean(lead.stage?.eFechamento);
 
   return (
     <div>
@@ -1020,7 +1009,7 @@ function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicos
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <h1 style={{ fontSize: 21 }}>{lead.empresa}</h1>
-            {stageBadge(lead.status)}
+            {stageBadge(lead.stage)}
             {jaConvertido && <span className="gm-badge gm-badge-success"><CheckCircle2 size={11} /> Cliente criado</span>}
           </div>
           <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>{lead.contato} · {lead.segmento} · {lead.cidade}</p>
@@ -1500,7 +1489,7 @@ function FollowUps({ followUps, onOpenLead, onConcluir }) {
               <div style={{ fontWeight: 700, fontSize: 13 }}>{f.empresa}</div>
               <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{f.contato}</div>
             </div>
-            {f.leadStatus ? stageBadge(f.leadStatus) : <span className="gm-badge gm-badge-gray">Cliente</span>}
+            {f.leadStage ? stageBadge(f.leadStage) : <span className="gm-badge gm-badge-gray">Cliente</span>}
           </div>
           <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Follow-up: {f.dataHoraFmt}</div>
           <div className="gm-fu-actions">
@@ -1917,9 +1906,10 @@ function NovoClienteModal({ servicosCatalog, onClose, onCreated }) {
 /*  CONFIGURAÇÕES                                                       */
 /* ------------------------------------------------------------------ */
 
-function Configuracoes({ user, perfil }) {
+function Configuracoes({ user, perfil, stages, onStagesChanged }) {
   const [toggles, setToggles] = useState({ notif: true, resumo: true, whatsapp: false });
   const toggle = (k) => setToggles((t) => ({ ...t, [k]: !t[k] }));
+  const [stagesModalOpen, setStagesModalOpen] = useState(false);
 
   const nomeExibicao = perfil?.nome || user?.email || "—";
   const papelExibicao = perfil?.papel || "Comercial";
@@ -1980,9 +1970,151 @@ function Configuracoes({ user, perfil }) {
         <div className="gm-config-row">
           <div>
             <div className="gm-config-label">Etapas do funil de leads</div>
-            <div className="gm-config-desc">{STAGES.length} etapas configuradas, de "Novo lead" até "Fechado".</div>
+            <div className="gm-config-desc">{stages.length} etapas configuradas, de "{stages[0]?.nome}" até "{stages[stages.length - 1]?.nome}".</div>
           </div>
-          <button className="gm-btn gm-btn-ghost">Editar etapas</button>
+          <button className="gm-btn gm-btn-ghost" onClick={() => setStagesModalOpen(true)}>Editar etapas</button>
+        </div>
+      </div>
+
+      {stagesModalOpen && (
+        <StagesModal stages={stages} onClose={() => setStagesModalOpen(false)} onChanged={onStagesChanged} />
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  MODAL — Editor de etapas do pipeline                                */
+/* ------------------------------------------------------------------ */
+
+function StagesModal({ stages, onClose, onChanged }) {
+  const [busyId, setBusyId] = useState(null);
+  const [error, setError] = useState(null);
+  const [novoNome, setNovoNome] = useState("");
+  const [criando, setCriando] = useState(false);
+
+  const ordenadas = [...stages].sort((a, b) => a.ordem - b.ordem);
+  const CORES = ["gray", "blue", "warning", "success", "danger"];
+
+  const rodar = async (id, fn) => {
+    setBusyId(id);
+    setError(null);
+    try {
+      await fn();
+      await onChanged();
+    } catch (err) {
+      setError(err.message || "Não foi possível concluir a ação.");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleRename = (stage, novoNomeValor) => {
+    if (novoNomeValor.trim() === stage.nome) return;
+    rodar(stage.id, () => atualizarStage(stage.id, { nome: novoNomeValor.trim() || stage.nome }));
+  };
+
+  const handleCriar = async () => {
+    if (!novoNome.trim()) return;
+    setCriando(true);
+    setError(null);
+    try {
+      await criarStage({ nome: novoNome.trim(), cor: "gray" });
+      setNovoNome("");
+      await onChanged();
+    } catch (err) {
+      setError(err.message || "Não foi possível criar a etapa.");
+    } finally {
+      setCriando(false);
+    }
+  };
+
+  const handleExcluir = (stage) => {
+    if (!window.confirm(`Excluir a etapa "${stage.nome}"? Só é possível se nenhum lead estiver nela.`)) return;
+    rodar(stage.id, () => excluirStage(stage.id));
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(10,23,48,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }}>
+      <div className="gm-card" style={{ width: 560, maxWidth: "100%", maxHeight: "88vh", overflowY: "auto", padding: 26 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+          <div>
+            <p className="gm-eyebrow">Pipeline</p>
+            <h2 style={{ fontSize: 18, marginTop: 4 }}>Editar etapas do funil</h2>
+          </div>
+          <button className="gm-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+        <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 6, marginBottom: 16 }}>
+          Renomeie, reordene, marque qual etapa conta como fechamento/perda, ou crie novas.
+        </p>
+
+        {error && <div style={{ fontSize: 12.5, color: "var(--danger)", background: "var(--danger-tint)", padding: "8px 10px", borderRadius: 8, marginBottom: 12 }}>{error}</div>}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {ordenadas.map((stage, i) => (
+            <div key={stage.id} className="gm-card" style={{ padding: 12, opacity: busyId === stage.id ? 0.6 : 1 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ display: "flex", flexDirection: "column" }}>
+                  <button className="gm-fu-action" style={{ padding: "2px 6px" }} disabled={i === 0 || busyId} onClick={() => rodar(stage.id, () => moverStage(stage.id, "up", stages))}>
+                    <ChevronUp size={12} />
+                  </button>
+                  <button className="gm-fu-action" style={{ padding: "2px 6px", marginTop: 2 }} disabled={i === ordenadas.length - 1 || busyId} onClick={() => rodar(stage.id, () => moverStage(stage.id, "down", stages))}>
+                    <ChevronDown size={12} />
+                  </button>
+                </div>
+
+                <input
+                  className="gm-input"
+                  defaultValue={stage.nome}
+                  key={stage.nome}
+                  style={{ flex: 1 }}
+                  onBlur={(e) => handleRename(stage, e.target.value)}
+                  disabled={busyId === stage.id}
+                />
+
+                <div style={{ display: "flex", gap: 4 }}>
+                  {CORES.map((c) => (
+                    <span
+                      key={c}
+                      onClick={() => rodar(stage.id, () => atualizarStage(stage.id, { cor: c }))}
+                      className={`gm-badge ${CORES_BADGE[c]}`}
+                      style={{ cursor: "pointer", width: 20, height: 20, padding: 0, border: stage.cor === c ? "2px solid var(--ink)" : "2px solid transparent" }}
+                    />
+                  ))}
+                </div>
+
+                <button className="gm-icon-btn" disabled={busyId === stage.id} onClick={() => handleExcluir(stage)} title="Excluir etapa">
+                  <X size={14} />
+                </button>
+              </div>
+
+              <div style={{ display: "flex", gap: 14, marginTop: 8, paddingLeft: 34 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}>
+                  <input type="checkbox" checked={stage.eFechamento} onChange={(e) => rodar(stage.id, () => atualizarStage(stage.id, { eFechamento: e.target.checked }))} />
+                  Etapa de fechamento
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}>
+                  <input type="checkbox" checked={stage.ePerda} onChange={(e) => rodar(stage.id, () => atualizarStage(stage.id, { ePerda: e.target.checked }))} />
+                  Etapa de perda
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}>
+                  <input type="checkbox" checked={stage.ePadrao} onChange={(e) => rodar(stage.id, () => atualizarStage(stage.id, { ePadrao: e.target.checked }))} />
+                  Etapa inicial padrão
+                </label>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          <input className="gm-input" placeholder="Nome da nova etapa" value={novoNome} onChange={(e) => setNovoNome(e.target.value)} />
+          <button className="gm-btn gm-btn-primary" onClick={handleCriar} disabled={criando || !novoNome.trim()}>
+            {criando ? <Loader2 size={14} className="gm-spin" /> : <Plus size={14} />} Adicionar
+          </button>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
+          <button className="gm-btn gm-btn-ghost" onClick={onClose}>Fechar</button>
         </div>
       </div>
     </div>
@@ -2005,6 +2137,7 @@ export default function App() {
   const [followUps, setFollowUps] = useState([]);
   const [recentActivity, setRecentActivity] = useState([]);
   const [servicosCatalog, setServicosCatalog] = useState([]);
+  const [stages, setStages] = useState([]);
   const [perfil, setPerfil] = useState(null);
 
   const [loading, setLoading] = useState(true);
@@ -2017,8 +2150,8 @@ export default function App() {
     setError(null);
     setLoading(true);
     try {
-      const [leadsData, clientesData, propostasData, followUpsData, atividade, servicos] = await Promise.all([
-        fetchLeads(), fetchClientes(), fetchPropostas(), fetchFollowUps(), fetchAtividadeRecente(4), fetchServicos(),
+      const [leadsData, clientesData, propostasData, followUpsData, atividade, servicos, stagesData] = await Promise.all([
+        fetchLeads(), fetchClientes(), fetchPropostas(), fetchFollowUps(), fetchAtividadeRecente(4), fetchServicos(), fetchStages(),
       ]);
       setLeads(leadsData);
       setClientes(clientesData);
@@ -2026,6 +2159,7 @@ export default function App() {
       setFollowUps(followUpsData);
       setRecentActivity(atividade);
       setServicosCatalog(servicos);
+      setStages(stagesData);
     } catch (err) {
       setError(err.message || "Não foi possível carregar os dados do Supabase.");
     } finally {
@@ -2097,6 +2231,15 @@ export default function App() {
   const handleClienteCriado = async () => {
     const clientesData = await fetchClientes();
     setClientes(clientesData);
+  };
+
+  const handleStagesChanged = async () => {
+    // Rebusca leads e follow-ups também: ambos trazem a etapa embutida
+    // (nome/cor), que fica desatualizada até recarregar depois de uma edição.
+    const [stagesData, leadsData, followUpsData] = await Promise.all([fetchStages(), fetchLeads(), fetchFollowUps()]);
+    setStages(stagesData);
+    setLeads(leadsData);
+    setFollowUps(followUpsData);
   };
 
   const activeNavKey = view === "leadDetail" ? "leads" : view;
@@ -2195,10 +2338,10 @@ export default function App() {
 
         <div className="gm-content">
           {view === "dashboard" && (
-            <Dashboard leads={leads} clientes={clientes} followUps={followUps} recentActivity={recentActivity} nomeExibicao={perfil?.nome || user.email} onOpenLead={openLead} goTo={goTo} />
+            <Dashboard leads={leads} clientes={clientes} followUps={followUps} recentActivity={recentActivity} stages={stages} nomeExibicao={perfil?.nome || user.email} onOpenLead={openLead} goTo={goTo} />
           )}
           {view === "leads" && (
-            <LeadsBoard leads={leads} servicosCatalog={servicosCatalog} onOpenLead={openLead} onLeadCreated={handleLeadCreated} />
+            <LeadsBoard leads={leads} stages={stages} servicosCatalog={servicosCatalog} onOpenLead={openLead} onLeadCreated={handleLeadCreated} />
           )}
           {view === "leadDetail" && (
             <LeadDetail
@@ -2218,7 +2361,7 @@ export default function App() {
           {view === "clientes" && (
             <Clientes clientes={clientes} servicosCatalog={servicosCatalog} onRefresh={handleClienteCriado} />
           )}
-          {view === "config" && <Configuracoes user={user} perfil={perfil} />}
+          {view === "config" && <Configuracoes user={user} perfil={perfil} stages={stages} onStagesChanged={handleStagesChanged} />}
         </div>
       </div>
 

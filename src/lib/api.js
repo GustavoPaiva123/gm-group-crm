@@ -38,7 +38,7 @@ const PROPOSTA_STATUS_LABEL = {
 export async function fetchLeads() {
   const { data, error } = await supabase
     .from("leads")
-    .select("*, usuarios(nome), lead_servicos(servicos(nome))")
+    .select("*, usuarios(nome), lead_servicos(servicos(nome)), pipeline_stages(id, chave, nome, cor, e_fechamento, e_perda)")
     .order("created_at", { ascending: false });
 
   if (error) throw error;
@@ -53,7 +53,15 @@ export async function fetchLeads() {
     cidade: fmtCidade(row.cidade, row.estado),
     segmento: row.segmento,
     origem: row.origem,
-    status: row.status,
+    stageId: row.pipeline_stages?.id,
+    stage: row.pipeline_stages ? {
+      id: row.pipeline_stages.id,
+      chave: row.pipeline_stages.chave,
+      nome: row.pipeline_stages.nome,
+      cor: row.pipeline_stages.cor,
+      eFechamento: row.pipeline_stages.e_fechamento,
+      ePerda: row.pipeline_stages.e_perda,
+    } : null,
     responsavel: row.usuarios?.nome ?? "—",
     responsavelId: row.responsavel_id,
     valor: Number(row.valor_estimado ?? 0),
@@ -118,7 +126,7 @@ export async function fetchPropostas() {
 export async function fetchFollowUps() {
   const { data, error } = await supabase
     .from("follow_ups")
-    .select("*, leads(id, empresa, contato, status), clientes(id, nome, contato_principal)")
+    .select("*, leads(id, empresa, contato, pipeline_stages(nome, cor)), clientes(id, nome, contato_principal)")
     .order("data_hora", { ascending: true });
 
   if (error) throw error;
@@ -132,7 +140,7 @@ export async function fetchFollowUps() {
     empresa: row.leads?.empresa ?? row.clientes?.nome ?? "—",
     contato: row.leads?.contato ?? row.clientes?.contato_principal ?? "—",
     leadId: row.leads?.id ?? null,
-    leadStatus: row.leads?.status ?? null,
+    leadStage: row.leads?.pipeline_stages ? { nome: row.leads.pipeline_stages.nome, cor: row.leads.pipeline_stages.cor } : null,
     clienteId: row.clientes?.id ?? null,
   }));
 }
@@ -222,6 +230,15 @@ export async function criarLead({
   empresa, contato, whatsapp, instagram, email, cidade, estado,
   segmento, origem, valorEstimado, observacoes, servicoIds,
 }) {
+  const { data: stagePadrao, error: stageErr } = await supabase
+    .from("pipeline_stages")
+    .select("id")
+    .eq("e_padrao", true)
+    .limit(1)
+    .maybeSingle();
+  if (stageErr) throw stageErr;
+  if (!stagePadrao) throw new Error("Nenhuma etapa padrão configurada no funil. Configure uma em Configurações > Pipeline.");
+
   const { data: lead, error } = await supabase
     .from("leads")
     .insert({
@@ -235,7 +252,7 @@ export async function criarLead({
       origem: origem || null,
       valor_estimado: valorEstimado === "" || valorEstimado == null ? null : Number(valorEstimado),
       observacoes: observacoes || null,
-      status: "novo",
+      stage_id: stagePadrao.id,
     })
     .select()
     .single();
@@ -413,4 +430,70 @@ export async function converterLeadEmCliente({
 
   if (error) throw error;
   return data; // uuid do novo cliente
+}
+
+/* ------------------------------------------------------------------ */
+/*  ETAPAS DO PIPELINE (funil de leads, editável)                       */
+/* ------------------------------------------------------------------ */
+
+export async function fetchStages() {
+  const { data, error } = await supabase.from("pipeline_stages").select("*").order("ordem");
+  if (error) throw error;
+  return data.map((row) => ({
+    id: row.id,
+    chave: row.chave,
+    nome: row.nome,
+    ordem: row.ordem,
+    cor: row.cor,
+    eFechamento: row.e_fechamento,
+    ePerda: row.e_perda,
+    ePadrao: row.e_padrao,
+  }));
+}
+
+export async function criarStage({ nome, cor }) {
+  const { data: max } = await supabase.from("pipeline_stages").select("ordem").order("ordem", { ascending: false }).limit(1).maybeSingle();
+  const proximaOrdem = (max?.ordem ?? 0) + 1;
+  const chave = `etapa_${Date.now()}`;
+  const { error } = await supabase.from("pipeline_stages").insert({
+    chave, nome, ordem: proximaOrdem, cor: cor || "gray",
+  });
+  if (error) throw error;
+}
+
+export async function atualizarStage(id, campos) {
+  const payload = {};
+  if (campos.nome !== undefined) payload.nome = campos.nome;
+  if (campos.cor !== undefined) payload.cor = campos.cor;
+  if (campos.eFechamento !== undefined) payload.e_fechamento = campos.eFechamento;
+  if (campos.ePerda !== undefined) payload.e_perda = campos.ePerda;
+  if (campos.ePadrao !== undefined) payload.e_padrao = campos.ePadrao;
+  const { error } = await supabase.from("pipeline_stages").update(payload).eq("id", id);
+  if (error) throw error;
+}
+
+export async function moverStage(id, direcao, todasEtapas) {
+  const ordenadas = [...todasEtapas].sort((a, b) => a.ordem - b.ordem);
+  const idx = ordenadas.findIndex((s) => s.id === id);
+  const vizinhoIdx = direcao === "up" ? idx - 1 : idx + 1;
+  if (idx === -1 || vizinhoIdx < 0 || vizinhoIdx >= ordenadas.length) return;
+
+  const atual = ordenadas[idx];
+  const vizinho = ordenadas[vizinhoIdx];
+
+  await supabase.from("pipeline_stages").update({ ordem: vizinho.ordem }).eq("id", atual.id);
+  await supabase.from("pipeline_stages").update({ ordem: atual.ordem }).eq("id", vizinho.id);
+}
+
+export async function excluirStage(id) {
+  const { count, error: countErr } = await supabase
+    .from("leads")
+    .select("id", { count: "exact", head: true })
+    .eq("stage_id", id);
+  if (countErr) throw countErr;
+  if (count > 0) {
+    throw new Error(`Essa etapa tem ${count} lead(s) nela. Mova os leads para outra etapa antes de excluir.`);
+  }
+  const { error } = await supabase.from("pipeline_stages").delete().eq("id", id);
+  if (error) throw error;
 }
