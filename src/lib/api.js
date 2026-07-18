@@ -325,6 +325,73 @@ export async function criarBriefing({ leadId, ...campos }) {
   });
 }
 
+/* ------------------------------------------------------------------ */
+/*  CRIAR CLIENTE (direto, sem passar pelo funil de leads)              */
+/* ------------------------------------------------------------------ */
+
+export async function criarCliente({
+  nome, contatoPrincipal, whatsapp, instagram, email, cidade, estado,
+  segmento, status, valorMensal, dataInicio, proximaRenovacao, observacoes, servicoIds,
+}) {
+  const { data: cliente, error } = await supabase
+    .from("clientes")
+    .insert({
+      nome,
+      contato_principal: contatoPrincipal || null,
+      whatsapp: whatsapp || null,
+      instagram: instagram || null,
+      email: email || null,
+      cidade: cidade || null,
+      estado: estado || null,
+      segmento: segmento || null,
+      status: status || "ativo",
+      valor_mensal: valorMensal === "" || valorMensal == null ? null : Number(valorMensal),
+      data_inicio: dataInicio || null,
+      proxima_renovacao: proximaRenovacao || null,
+      observacoes: observacoes || null,
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  if (servicoIds && servicoIds.length) {
+    const { error: servErr } = await supabase
+      .from("cliente_servicos")
+      .insert(servicoIds.map((servico_id) => ({ cliente_id: cliente.id, servico_id })));
+    if (servErr) throw servErr;
+  }
+
+  await supabase.from("timeline_eventos").insert({
+    cliente_id: cliente.id,
+    tipo: "Cliente cadastrado",
+    descricao: "Cliente cadastrado diretamente no CRM.",
+  });
+
+  return cliente.id;
+}
+
+/* ------------------------------------------------------------------ */
+/*  CRIAR PROPOSTA                                                      */
+/* ------------------------------------------------------------------ */
+
+export async function criarProposta({ leadId, clienteId, titulo, valor, status, enviadaEm, observacoes }) {
+  const { error } = await supabase.from("propostas").insert({
+    lead_id: leadId || null,
+    cliente_id: clienteId || null,
+    titulo,
+    valor: Number(valor),
+    status: status || "rascunho",
+    enviada_em: enviadaEm || null,
+    observacoes: observacoes || null,
+  });
+  if (error) throw error;
+
+  const eventoBase = { tipo: "Proposta enviada", descricao: titulo };
+  if (leadId) await supabase.from("timeline_eventos").insert({ lead_id: leadId, ...eventoBase });
+  else if (clienteId) await supabase.from("timeline_eventos").insert({ cliente_id: clienteId, ...eventoBase });
+}
+
 export async function converterLeadEmCliente({
   leadId,
   nome,

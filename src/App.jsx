@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   LayoutDashboard, Users, Rows3, Clock, FileText, Building2, Settings,
   Search, Bell, Plus, ChevronLeft, ChevronRight, Phone, AtSign, MapPin,
@@ -11,7 +11,7 @@ import {
   fetchLeads, fetchClientes, fetchPropostas, fetchFollowUps,
   fetchTimelineByLead, fetchAtividadeRecente, fetchServicos,
   concluirFollowUp, converterLeadEmCliente, fetchPerfilPorEmail,
-  criarLead, fetchBriefingsByLead, criarBriefing,
+  criarLead, fetchBriefingsByLead, criarBriefing, criarCliente, criarProposta,
 } from "./lib/api";
 import { useAuth } from "./lib/AuthContext";
 
@@ -375,6 +375,34 @@ const CSS = `
   display: flex; align-items: center; justify-content: center; gap: 6px;
   margin-top: 18px; font-size: 11.5px; color: var(--text-faint);
 }
+
+/* ---------- Topbar search & notifications ---------- */
+.gm-search-wrap { position: relative; width: 280px; }
+.gm-search-dropdown {
+  position: absolute; top: calc(100% + 8px); left: 0; width: 340px; max-height: 360px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(13,32,73,0.14); z-index: 40; padding: 6px;
+}
+.gm-search-empty { padding: 16px; font-size: 12.5px; color: var(--text-faint); text-align: center; }
+.gm-search-group-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-faint); padding: 8px 10px 4px; }
+.gm-search-result-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 10px; border-radius: 8px; cursor: pointer;
+}
+.gm-search-result-item:hover { background: var(--bg); }
+
+.gm-notif-wrap { position: relative; }
+.gm-notif-dropdown {
+  position: absolute; top: calc(100% + 8px); right: 0; width: 320px; max-height: 400px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(13,32,73,0.14); z-index: 40; padding: 6px;
+}
+.gm-notif-header { font-size: 12.5px; font-weight: 700; color: var(--ink); padding: 10px 10px 6px; }
+.gm-notif-item {
+  display: flex; gap: 9px; align-items: flex-start; padding: 9px 10px; border-radius: 8px; cursor: pointer;
+}
+.gm-notif-item:hover { background: var(--bg); }
+.gm-notif-empty { padding: 18px 10px; font-size: 12.5px; color: var(--text-faint); text-align: center; }
 `;
 
 /* ------------------------------------------------------------------ */
@@ -482,6 +510,142 @@ function stageBadge(status) {
 function Avatar({ name }) {
   const initials = name.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
   return <div className="gm-avatar">{initials}</div>;
+}
+
+/* ------------------------------------------------------------------ */
+/*  BUSCA NO TOPO                                                       */
+/* ------------------------------------------------------------------ */
+
+function TopbarSearch({ leads, clientes, onOpenLead, goTo }) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const q = query.trim().toLowerCase();
+  const leadResults = q
+    ? leads.filter((l) => l.empresa.toLowerCase().includes(q) || l.contato.toLowerCase().includes(q)).slice(0, 6)
+    : [];
+  const clienteResults = q
+    ? clientes.filter((c) => c.nome.toLowerCase().includes(q) || (c.contato || "").toLowerCase().includes(q)).slice(0, 6)
+    : [];
+  const semResultados = q && leadResults.length === 0 && clienteResults.length === 0;
+
+  return (
+    <div className="gm-search-wrap" ref={wrapRef}>
+      <div className="gm-search">
+        <Search size={14} />
+        <input
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          placeholder="Buscar leads, clientes..."
+          style={{ border: "none", outline: "none", background: "transparent", font: "inherit", color: "inherit", width: "100%" }}
+        />
+      </div>
+      {open && q && (
+        <div className="gm-search-dropdown">
+          {semResultados && <div className="gm-search-empty">Nenhum resultado para "{query}".</div>}
+          {leadResults.length > 0 && (
+            <>
+              <div className="gm-search-group-label">Leads</div>
+              {leadResults.map((l) => (
+                <div key={l.id} className="gm-search-result-item" onClick={() => { onOpenLead(l.id); setOpen(false); setQuery(""); }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{l.empresa}</div>
+                    <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>{l.contato}</div>
+                  </div>
+                  {stageBadge(l.status)}
+                </div>
+              ))}
+            </>
+          )}
+          {clienteResults.length > 0 && (
+            <>
+              <div className="gm-search-group-label">Clientes</div>
+              {clienteResults.map((c) => (
+                <div key={c.id} className="gm-search-result-item" onClick={() => { goTo("clientes"); setOpen(false); setQuery(""); }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{c.nome}</div>
+                    <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>{c.contato}</div>
+                  </div>
+                  <span className="gm-badge gm-badge-success">{c.status}</span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  NOTIFICAÇÕES                                                        */
+/* ------------------------------------------------------------------ */
+
+function NotificationsBell({ followUps, onOpenLead, goTo }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
+
+  const pendentes = followUps.filter((f) => f.status === "pendente" && f.dataHora);
+  const atrasados = pendentes.filter((f) => f.dataHora < startOfToday).sort((a, b) => a.dataHora - b.dataHora);
+  const hoje = pendentes.filter((f) => f.dataHora >= startOfToday && f.dataHora < endOfToday).sort((a, b) => a.dataHora - b.dataHora);
+  const relevantes = [...atrasados, ...hoje].slice(0, 8);
+  const total = atrasados.length + hoje.length;
+
+  return (
+    <div className="gm-notif-wrap" ref={wrapRef}>
+      <div className="gm-icon-btn" onClick={() => setOpen((o) => !o)} style={{ cursor: "pointer" }}>
+        <Bell size={16} />
+        {total > 0 && <span className="gm-dot" />}
+      </div>
+      {open && (
+        <div className="gm-notif-dropdown">
+          <div className="gm-notif-header">Follow-ups de hoje e atrasados</div>
+          {relevantes.length === 0 && <div className="gm-notif-empty">Nada pendente por agora. 🎉</div>}
+          {relevantes.map((f) => (
+            <div key={f.id} className="gm-notif-item" onClick={() => { if (f.leadId) onOpenLead(f.leadId); setOpen(false); }}>
+              <div style={{ marginTop: 2, color: f.dataHora < startOfToday ? "var(--danger)" : "var(--warning)" }}>
+                {f.dataHora < startOfToday ? <AlertTriangle size={14} /> : <Clock size={14} />}
+              </div>
+              <div>
+                <div style={{ fontSize: 12.5, fontWeight: 600 }}>{f.empresa}</div>
+                <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>{f.dataHoraFmt}</div>
+              </div>
+            </div>
+          ))}
+          {total > 0 && (
+            <div
+              style={{ textAlign: "center", padding: "8px 10px", fontSize: 12, fontWeight: 600, color: "var(--blue)", cursor: "pointer" }}
+              onClick={() => { goTo("followups"); setOpen(false); }}
+            >
+              Ver todos os follow-ups
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -1367,7 +1531,8 @@ function FollowUps({ followUps, onOpenLead, onConcluir }) {
 /*  PROPOSTAS                                                           */
 /* ------------------------------------------------------------------ */
 
-function Propostas({ propostas }) {
+function Propostas({ propostas, leads, clientes, onRefresh }) {
+  const [modalOpen, setModalOpen] = useState(false);
   const groups = ["Rascunho", "Enviada", "Negociação", "Aprovada", "Perdida"];
   const toneFor = (s) => ({
     Rascunho: "gm-badge-gray", Enviada: "gm-badge-blue", Negociação: "gm-badge-warning",
@@ -1381,8 +1546,23 @@ function Propostas({ propostas }) {
           <h1 style={{ fontSize: 22 }}>Propostas</h1>
           <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>Acompanhe cada proposta comercial em andamento.</p>
         </div>
-        <button className="gm-btn gm-btn-primary"><Plus size={15} /> Nova proposta</button>
+        <button className="gm-btn gm-btn-primary" onClick={() => setModalOpen(true)}><Plus size={15} /> Nova proposta</button>
       </div>
+
+      {modalOpen && (
+        <NovaPropostaModal
+          leads={leads}
+          clientes={clientes}
+          onClose={() => setModalOpen(false)}
+          onCreated={() => { setModalOpen(false); onRefresh(); }}
+        />
+      )}
+
+      {propostas.length === 0 && (
+        <div className="gm-card" style={{ padding: 20, marginTop: 18, fontSize: 12.5, color: "var(--text-faint)" }}>
+          Nenhuma proposta cadastrada ainda.
+        </div>
+      )}
 
       {groups.map((g) => {
         const items = propostas.filter((p) => p.status === g);
@@ -1416,10 +1596,116 @@ function Propostas({ propostas }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  MODAL — Nova proposta                                               */
+/* ------------------------------------------------------------------ */
+
+function NovaPropostaModal({ leads, clientes, onClose, onCreated }) {
+  const [vinculoTipo, setVinculoTipo] = useState("lead");
+  const [vinculoId, setVinculoId] = useState("");
+  const [form, setForm] = useState({ titulo: "", valor: "", status: "rascunho", enviadaEm: "", observacoes: "" });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
+
+  const handleSubmit = async () => {
+    if (!vinculoId) { setError("Escolha o lead ou cliente da proposta."); return; }
+    if (!form.titulo.trim() || !form.valor) { setError("Preencha o título e o valor."); return; }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await criarProposta({
+        leadId: vinculoTipo === "lead" ? vinculoId : null,
+        clienteId: vinculoTipo === "cliente" ? vinculoId : null,
+        ...form,
+      });
+      onCreated();
+    } catch (err) {
+      setError(err.message || "Não foi possível criar a proposta.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(10,23,48,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }}>
+      <div className="gm-card" style={{ width: 480, maxWidth: "100%", maxHeight: "88vh", overflowY: "auto", padding: 26 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+          <div>
+            <p className="gm-eyebrow">Nova proposta</p>
+            <h2 style={{ fontSize: 18, marginTop: 4 }}>Cadastrar proposta</h2>
+          </div>
+          <button className="gm-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 6 }}>Vincular a</div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+              <span onClick={() => { setVinculoTipo("lead"); setVinculoId(""); }} className={`gm-badge ${vinculoTipo === "lead" ? "gm-badge-blue" : "gm-badge-gray"}`} style={{ cursor: "pointer" }}>Lead</span>
+              <span onClick={() => { setVinculoTipo("cliente"); setVinculoId(""); }} className={`gm-badge ${vinculoTipo === "cliente" ? "gm-badge-blue" : "gm-badge-gray"}`} style={{ cursor: "pointer" }}>Cliente</span>
+            </div>
+            <select className="gm-input" value={vinculoId} onChange={(e) => setVinculoId(e.target.value)}>
+              <option value="">Selecione...</option>
+              {(vinculoTipo === "lead" ? leads : clientes).map((item) => (
+                <option key={item.id} value={item.id}>{vinculoTipo === "lead" ? item.empresa : item.nome}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Título da proposta</div>
+            <input className="gm-input" value={form.titulo} onChange={set("titulo")} placeholder="Ex.: Tráfego pago + Social media" />
+          </div>
+
+          <div style={{ display: "flex", gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Valor (R$)</div>
+              <input className="gm-input" type="number" min="0" step="100" value={form.valor} onChange={set("valor")} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Status</div>
+              <select className="gm-input" value={form.status} onChange={set("status")}>
+                <option value="rascunho">Rascunho</option>
+                <option value="enviada">Enviada</option>
+                <option value="negociacao">Negociação</option>
+                <option value="aprovada">Aprovada</option>
+                <option value="perdida">Perdida</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Data de envio</div>
+            <input className="gm-input" type="date" value={form.enviadaEm} onChange={set("enviadaEm")} />
+          </div>
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Observações</div>
+            <textarea className="gm-input" rows={3} value={form.observacoes} onChange={set("observacoes")} style={{ resize: "vertical", fontFamily: "inherit" }} />
+          </div>
+
+          {error && <div style={{ fontSize: 12.5, color: "var(--danger)", background: "var(--danger-tint)", padding: "8px 10px", borderRadius: 8 }}>{error}</div>}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+            <button className="gm-btn gm-btn-ghost" onClick={onClose} disabled={submitting}>Cancelar</button>
+            <button className="gm-btn gm-btn-primary" onClick={handleSubmit} disabled={submitting}>
+              {submitting ? <Loader2 size={14} className="gm-spin" /> : <Plus size={14} />}
+              {submitting ? "Criando..." : "Criar proposta"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  CLIENTES                                                            */
 /* ------------------------------------------------------------------ */
 
-function Clientes({ clientes }) {
+function Clientes({ clientes, servicosCatalog, onRefresh }) {
+  const [modalOpen, setModalOpen] = useState(false);
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1427,9 +1713,24 @@ function Clientes({ clientes }) {
           <h1 style={{ fontSize: 22 }}>Clientes</h1>
           <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>{clientes.length} clientes na base da GM Group</p>
         </div>
-        <button className="gm-btn gm-btn-primary"><Plus size={15} /> Novo cliente</button>
+        <button className="gm-btn gm-btn-primary" onClick={() => setModalOpen(true)}><Plus size={15} /> Novo cliente</button>
       </div>
 
+      {modalOpen && (
+        <NovoClienteModal
+          servicosCatalog={servicosCatalog}
+          onClose={() => setModalOpen(false)}
+          onCreated={() => { setModalOpen(false); onRefresh(); }}
+        />
+      )}
+
+      {clientes.length === 0 && (
+        <div className="gm-card" style={{ padding: 20, marginTop: 18, fontSize: 12.5, color: "var(--text-faint)" }}>
+          Nenhum cliente cadastrado ainda.
+        </div>
+      )}
+
+      {clientes.length > 0 && (
       <div className="gm-card" style={{ marginTop: 18, overflowX: "auto" }}>
         <table className="gm-table">
           <thead>
@@ -1473,6 +1774,141 @@ function Clientes({ clientes }) {
           </tbody>
         </table>
       </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  MODAL — Novo cliente                                                */
+/* ------------------------------------------------------------------ */
+
+function NovoClienteModal({ servicosCatalog, onClose, onCreated }) {
+  const [form, setForm] = useState({
+    nome: "", contatoPrincipal: "", whatsapp: "", instagram: "", email: "",
+    cidade: "", estado: "", segmento: "", status: "ativo", valorMensal: "",
+    dataInicio: "", proximaRenovacao: "", observacoes: "", servicoIds: [],
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
+  const toggleServico = (id) => {
+    setForm((f) => ({ ...f, servicoIds: f.servicoIds.includes(id) ? f.servicoIds.filter((s) => s !== id) : [...f.servicoIds, id] }));
+  };
+
+  const handleSubmit = async () => {
+    if (!form.nome.trim()) { setError("Preencha ao menos o nome do cliente."); return; }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const id = await criarCliente(form);
+      onCreated(id);
+    } catch (err) {
+      setError(err.message || "Não foi possível criar o cliente.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(10,23,48,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }}>
+      <div className="gm-card" style={{ width: 560, maxWidth: "100%", maxHeight: "88vh", overflowY: "auto", padding: 26 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+          <div>
+            <p className="gm-eyebrow">Novo cliente</p>
+            <h2 style={{ fontSize: 18, marginTop: 4 }}>Cadastrar cliente diretamente</h2>
+          </div>
+          <button className="gm-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div className="gm-info-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Nome / empresa *</div>
+              <input className="gm-input" value={form.nome} onChange={set("nome")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Contato principal</div>
+              <input className="gm-input" value={form.contatoPrincipal} onChange={set("contatoPrincipal")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>WhatsApp</div>
+              <input className="gm-input" value={form.whatsapp} onChange={set("whatsapp")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Instagram</div>
+              <input className="gm-input" value={form.instagram} onChange={set("instagram")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>E-mail</div>
+              <input className="gm-input" type="email" value={form.email} onChange={set("email")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Cidade</div>
+              <input className="gm-input" value={form.cidade} onChange={set("cidade")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Estado (UF)</div>
+              <input className="gm-input" maxLength={2} value={form.estado} onChange={(e) => setForm((f) => ({ ...f, estado: e.target.value.toUpperCase() }))} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Segmento</div>
+              <input className="gm-input" value={form.segmento} onChange={set("segmento")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Status</div>
+              <select className="gm-input" value={form.status} onChange={set("status")}>
+                <option value="ativo">Ativo</option>
+                <option value="em_risco">Em risco</option>
+                <option value="inativo">Inativo</option>
+                <option value="cancelado">Cancelado</option>
+              </select>
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Valor mensal (R$)</div>
+              <input className="gm-input" type="number" min="0" step="100" value={form.valorMensal} onChange={set("valorMensal")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Data de início</div>
+              <input className="gm-input" type="date" value={form.dataInicio} onChange={set("dataInicio")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Próxima renovação</div>
+              <input className="gm-input" type="date" value={form.proximaRenovacao} onChange={set("proximaRenovacao")} />
+            </div>
+          </div>
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 6 }}>Serviços contratados</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {servicosCatalog.map((s) => {
+                const active = form.servicoIds.includes(s.id);
+                return (
+                  <span key={s.id} onClick={() => toggleServico(s.id)} className={`gm-badge ${active ? "gm-badge-blue" : "gm-badge-gray"}`} style={{ cursor: "pointer", userSelect: "none" }}>
+                    {active && <CheckCircle2 size={11} />} {s.nome}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Observações</div>
+            <textarea className="gm-input" rows={3} value={form.observacoes} onChange={set("observacoes")} style={{ resize: "vertical", fontFamily: "inherit" }} />
+          </div>
+
+          {error && <div style={{ fontSize: 12.5, color: "var(--danger)", background: "var(--danger-tint)", padding: "8px 10px", borderRadius: 8 }}>{error}</div>}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+            <button className="gm-btn gm-btn-ghost" onClick={onClose} disabled={submitting}>Cancelar</button>
+            <button className="gm-btn gm-btn-primary" onClick={handleSubmit} disabled={submitting}>
+              {submitting ? <Loader2 size={14} className="gm-spin" /> : <Plus size={14} />}
+              {submitting ? "Criando..." : "Criar cliente"}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1481,9 +1917,12 @@ function Clientes({ clientes }) {
 /*  CONFIGURAÇÕES                                                       */
 /* ------------------------------------------------------------------ */
 
-function Configuracoes() {
+function Configuracoes({ user, perfil }) {
   const [toggles, setToggles] = useState({ notif: true, resumo: true, whatsapp: false });
   const toggle = (k) => setToggles((t) => ({ ...t, [k]: !t[k] }));
+
+  const nomeExibicao = perfil?.nome || user?.email || "—";
+  const papelExibicao = perfil?.papel || "Comercial";
 
   return (
     <div>
@@ -1493,20 +1932,20 @@ function Configuracoes() {
       <div className="gm-card gm-config-section">
         <p className="gm-eyebrow" style={{ marginBottom: 6 }}>Perfil</p>
         <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 16 }}>
-          <div className="gm-avatar" style={{ width: 48, height: 48, fontSize: 16 }}>G</div>
+          <Avatar name={nomeExibicao} />
           <div>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>Gustavo</div>
-            <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>Responsável comercial · GM Group</div>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>{nomeExibicao}</div>
+            <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>{papelExibicao} · GM Group</div>
           </div>
         </div>
         <div className="gm-info-grid">
           <div>
             <div className="gm-info-label">Nome</div>
-            <input className="gm-input" defaultValue="Gustavo" style={{ marginTop: 4 }} />
+            <input className="gm-input" defaultValue={perfil?.nome || ""} key={nomeExibicao} style={{ marginTop: 4 }} />
           </div>
           <div>
             <div className="gm-info-label">E-mail</div>
-            <input className="gm-input" defaultValue="gustavo@gmgroup.com.br" style={{ marginTop: 4 }} />
+            <input className="gm-input" defaultValue={user?.email || ""} key={user?.email} disabled style={{ marginTop: 4 }} />
           </div>
         </div>
       </div>
@@ -1650,6 +2089,16 @@ export default function App() {
     openLead(novoLeadId);
   };
 
+  const handlePropostaCriada = async () => {
+    const propostasData = await fetchPropostas();
+    setPropostas(propostasData);
+  };
+
+  const handleClienteCriado = async () => {
+    const clientesData = await fetchClientes();
+    setClientes(clientesData);
+  };
+
   const activeNavKey = view === "leadDetail" ? "leads" : view;
 
   if (authLoading) {
@@ -1738,9 +2187,9 @@ export default function App() {
 
       <div className="gm-main">
         <header className="gm-topbar">
-          <div className="gm-search"><Search size={14} /> Buscar leads, clientes...</div>
+          <TopbarSearch leads={leads} clientes={clientes} onOpenLead={openLead} goTo={goTo} />
           <div className="gm-topbar-actions">
-            <div className="gm-icon-btn"><Bell size={16} /><span className="gm-dot" /></div>
+            <NotificationsBell followUps={followUps} onOpenLead={openLead} goTo={goTo} />
           </div>
         </header>
 
@@ -1763,9 +2212,13 @@ export default function App() {
             />
           )}
           {view === "followups" && <FollowUps followUps={followUps} onOpenLead={openLead} onConcluir={handleConcluirFollowUp} />}
-          {view === "propostas" && <Propostas propostas={propostas} />}
-          {view === "clientes" && <Clientes clientes={clientes} />}
-          {view === "config" && <Configuracoes />}
+          {view === "propostas" && (
+            <Propostas propostas={propostas} leads={leads} clientes={clientes} onRefresh={handlePropostaCriada} />
+          )}
+          {view === "clientes" && (
+            <Clientes clientes={clientes} servicosCatalog={servicosCatalog} onRefresh={handleClienteCriado} />
+          )}
+          {view === "config" && <Configuracoes user={user} perfil={perfil} />}
         </div>
       </div>
 
