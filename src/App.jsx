@@ -35,6 +35,16 @@ const NAV_ITEMS = [
 
 const fmtBRL = (n) => n.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
 
+// Fallback de exibição quando não há um nome cadastrado em `usuarios`:
+// usa a parte antes do "@", separada por ponto/underscore/número, com a
+// primeira letra maiúscula — "marco.inouye@gmail.com" -> "Marco".
+function derivarNomeDoEmail(email) {
+  if (!email) return "—";
+  const usuario = email.split("@")[0];
+  const primeiraParte = usuario.split(/[.\-_0-9]+/).filter(Boolean)[0] || usuario;
+  return primeiraParte.charAt(0).toUpperCase() + primeiraParte.slice(1);
+}
+
 // Linhas de serviço do Catálogo GM Group (Parte 1 do manual)
 const LINHAS_SERVICO = [
   "Marketing & Tráfego Pago",
@@ -979,9 +989,10 @@ function NovoLeadModal({ servicosCatalog, onClose, onCreated }) {
 /*  LEAD DETAIL                                                         */
 /* ------------------------------------------------------------------ */
 
-function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicosCatalog, onBack, onConverted }) {
+function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicosCatalog, onBack, onConverted, onPropostaCriada }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [briefingModalOpen, setBriefingModalOpen] = useState(false);
+  const [propostaModalOpen, setPropostaModalOpen] = useState(false);
   const [briefings, setBriefings] = useState([]);
   const [briefingsLoading, setBriefingsLoading] = useState(true);
 
@@ -1023,7 +1034,11 @@ function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicos
               <Building2 size={14} /> Converter em cliente
             </button>
           )}
-          {!podeConverter && <button className="gm-btn gm-btn-primary"><FileText size={14} /> Gerar proposta</button>}
+          {!podeConverter && (
+            <button className="gm-btn gm-btn-primary" onClick={() => setPropostaModalOpen(true)}>
+              <FileText size={14} /> Gerar proposta
+            </button>
+          )}
         </div>
       </div>
 
@@ -1148,6 +1163,16 @@ function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicos
           lead={lead}
           onClose={() => setBriefingModalOpen(false)}
           onCreated={() => { setBriefingModalOpen(false); carregarBriefings(); }}
+        />
+      )}
+
+      {propostaModalOpen && (
+        <NovaPropostaModal
+          leads={[lead]}
+          clientes={[]}
+          leadFixo={lead}
+          onClose={() => setPropostaModalOpen(false)}
+          onCreated={() => { setPropostaModalOpen(false); onPropostaCriada(); }}
         />
       )}
     </div>
@@ -1588,10 +1613,14 @@ function Propostas({ propostas, leads, clientes, onRefresh }) {
 /*  MODAL — Nova proposta                                               */
 /* ------------------------------------------------------------------ */
 
-function NovaPropostaModal({ leads, clientes, onClose, onCreated }) {
-  const [vinculoTipo, setVinculoTipo] = useState("lead");
-  const [vinculoId, setVinculoId] = useState("");
-  const [form, setForm] = useState({ titulo: "", valor: "", status: "rascunho", enviadaEm: "", observacoes: "" });
+function NovaPropostaModal({ leads, clientes, leadFixo, onClose, onCreated }) {
+  const [vinculoTipo, setVinculoTipo] = useState(leadFixo ? "lead" : "lead");
+  const [vinculoId, setVinculoId] = useState(leadFixo ? leadFixo.id : "");
+  const [form, setForm] = useState({
+    titulo: leadFixo?.servicos?.length ? leadFixo.servicos.join(" + ") : "",
+    valor: leadFixo?.valor ? String(leadFixo.valor) : "",
+    status: "rascunho", enviadaEm: "", observacoes: "",
+  });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
@@ -1622,25 +1651,27 @@ function NovaPropostaModal({ leads, clientes, onClose, onCreated }) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
           <div>
             <p className="gm-eyebrow">Nova proposta</p>
-            <h2 style={{ fontSize: 18, marginTop: 4 }}>Cadastrar proposta</h2>
+            <h2 style={{ fontSize: 18, marginTop: 4 }}>{leadFixo ? `Proposta para ${leadFixo.empresa}` : "Cadastrar proposta"}</h2>
           </div>
           <button className="gm-icon-btn" onClick={onClose}><X size={16} /></button>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div>
-            <div className="gm-info-label" style={{ marginBottom: 6 }}>Vincular a</div>
-            <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-              <span onClick={() => { setVinculoTipo("lead"); setVinculoId(""); }} className={`gm-badge ${vinculoTipo === "lead" ? "gm-badge-blue" : "gm-badge-gray"}`} style={{ cursor: "pointer" }}>Lead</span>
-              <span onClick={() => { setVinculoTipo("cliente"); setVinculoId(""); }} className={`gm-badge ${vinculoTipo === "cliente" ? "gm-badge-blue" : "gm-badge-gray"}`} style={{ cursor: "pointer" }}>Cliente</span>
+          {!leadFixo && (
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 6 }}>Vincular a</div>
+              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                <span onClick={() => { setVinculoTipo("lead"); setVinculoId(""); }} className={`gm-badge ${vinculoTipo === "lead" ? "gm-badge-blue" : "gm-badge-gray"}`} style={{ cursor: "pointer" }}>Lead</span>
+                <span onClick={() => { setVinculoTipo("cliente"); setVinculoId(""); }} className={`gm-badge ${vinculoTipo === "cliente" ? "gm-badge-blue" : "gm-badge-gray"}`} style={{ cursor: "pointer" }}>Cliente</span>
+              </div>
+              <select className="gm-input" value={vinculoId} onChange={(e) => setVinculoId(e.target.value)}>
+                <option value="">Selecione...</option>
+                {(vinculoTipo === "lead" ? leads : clientes).map((item) => (
+                  <option key={item.id} value={item.id}>{vinculoTipo === "lead" ? item.empresa : item.nome}</option>
+                ))}
+              </select>
             </div>
-            <select className="gm-input" value={vinculoId} onChange={(e) => setVinculoId(e.target.value)}>
-              <option value="">Selecione...</option>
-              {(vinculoTipo === "lead" ? leads : clientes).map((item) => (
-                <option key={item.id} value={item.id}>{vinculoTipo === "lead" ? item.empresa : item.nome}</option>
-              ))}
-            </select>
-          </div>
+          )}
 
           <div>
             <div className="gm-info-label" style={{ marginBottom: 4 }}>Título da proposta</div>
@@ -1911,7 +1942,7 @@ function Configuracoes({ user, perfil, stages, onStagesChanged }) {
   const toggle = (k) => setToggles((t) => ({ ...t, [k]: !t[k] }));
   const [stagesModalOpen, setStagesModalOpen] = useState(false);
 
-  const nomeExibicao = perfil?.nome || user?.email || "—";
+  const nomeExibicao = perfil?.nome || derivarNomeDoEmail(user?.email) || "—";
   const papelExibicao = perfil?.papel || "Comercial";
 
   return (
@@ -1931,7 +1962,7 @@ function Configuracoes({ user, perfil, stages, onStagesChanged }) {
         <div className="gm-info-grid">
           <div>
             <div className="gm-info-label">Nome</div>
-            <input className="gm-input" defaultValue={perfil?.nome || ""} key={nomeExibicao} style={{ marginTop: 4 }} />
+            <input className="gm-input" defaultValue={nomeExibicao} key={nomeExibicao} style={{ marginTop: 4 }} />
           </div>
           <div>
             <div className="gm-info-label">E-mail</div>
@@ -2310,10 +2341,10 @@ export default function App() {
           ))}
         </nav>
         <div className="gm-sidebar-footer">
-          <Avatar name={perfil?.nome || user.email} />
+          <Avatar name={perfil?.nome || derivarNomeDoEmail(user.email)} />
           <div style={{ overflow: "hidden" }}>
             <div className="gm-user-name" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {perfil?.nome || user.email}
+              {perfil?.nome || derivarNomeDoEmail(user.email)}
             </div>
             <div className="gm-user-role">{perfil?.papel || "Comercial"}</div>
           </div>
@@ -2338,7 +2369,7 @@ export default function App() {
 
         <div className="gm-content">
           {view === "dashboard" && (
-            <Dashboard leads={leads} clientes={clientes} followUps={followUps} recentActivity={recentActivity} stages={stages} nomeExibicao={perfil?.nome || user.email} onOpenLead={openLead} goTo={goTo} />
+            <Dashboard leads={leads} clientes={clientes} followUps={followUps} recentActivity={recentActivity} stages={stages} nomeExibicao={perfil?.nome || derivarNomeDoEmail(user.email)} onOpenLead={openLead} goTo={goTo} />
           )}
           {view === "leads" && (
             <LeadsBoard leads={leads} stages={stages} servicosCatalog={servicosCatalog} onOpenLead={openLead} onLeadCreated={handleLeadCreated} />
@@ -2352,6 +2383,7 @@ export default function App() {
               servicosCatalog={servicosCatalog}
               onBack={() => goTo("leads")}
               onConverted={handleLeadConverted}
+              onPropostaCriada={handlePropostaCriada}
             />
           )}
           {view === "followups" && <FollowUps followUps={followUps} onOpenLead={openLead} onConcluir={handleConcluirFollowUp} />}

@@ -1,0 +1,39 @@
+name: Deploy GM Group CRM
+
+# Roda sozinho a cada push na branch main — não depende do app do GitHub
+# integrado ao Cloudflare (que estava com bug de permissão). Aqui é o
+# GitHub quem builda e publica, usando um token da Cloudflare guardado
+# como secret do repositório.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # também permite rodar manualmente pela aba Actions
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Build (Vite)
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+      - name: Publicar no Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          command: deploy
