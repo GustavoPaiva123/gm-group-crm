@@ -5,7 +5,7 @@ import {
   Calendar, MessageCircle, CheckCircle2, AlertTriangle, TrendingUp,
   ArrowUpRight, X, Menu, ArrowLeft, Mail, Briefcase, Tag, MoreHorizontal,
   DollarSign, Sparkles, Loader2, LogOut, Lock,
-  ClipboardList, Target, Layers, UserCheck, Link2
+  ClipboardList, Target, Layers, UserCheck, Link2, Trash2
 } from "lucide-react";
 import {
   fetchLeads, fetchClientes, fetchPropostas, fetchFollowUps,
@@ -13,6 +13,7 @@ import {
   concluirFollowUp, converterLeadEmCliente, fetchPerfilPorEmail,
   criarLead, fetchBriefingsByLead, criarBriefing, criarCliente, criarProposta,
   fetchStages, criarStage, atualizarStage, moverStage, excluirStage,
+  moverLeadParaEtapa, excluirLead, atualizarStatusProposta, excluirProposta,
 } from "./lib/api";
 import { useAuth } from "./lib/AuthContext";
 
@@ -989,12 +990,15 @@ function NovoLeadModal({ servicosCatalog, onClose, onCreated }) {
 /*  LEAD DETAIL                                                         */
 /* ------------------------------------------------------------------ */
 
-function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicosCatalog, onBack, onConverted, onPropostaCriada }) {
+function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicosCatalog, stages, onBack, onConverted, onPropostaCriada, onLeadMoved, onLeadDeleted }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [briefingModalOpen, setBriefingModalOpen] = useState(false);
   const [propostaModalOpen, setPropostaModalOpen] = useState(false);
   const [briefings, setBriefings] = useState([]);
   const [briefingsLoading, setBriefingsLoading] = useState(true);
+  const [movendo, setMovendo] = useState(false);
+  const [excluindo, setExcluindo] = useState(false);
+  const [erroExclusao, setErroExclusao] = useState(null);
 
   const carregarBriefings = useCallback(() => {
     if (!lead) return;
@@ -1012,15 +1016,55 @@ function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicos
   const jaConvertido = Boolean(lead.convertidoEmClienteId);
   const podeConverter = Boolean(lead.stage?.eFechamento);
 
+  const handleMudarEtapa = async (novoStageId) => {
+    if (!novoStageId || novoStageId === lead.stageId) return;
+    setMovendo(true);
+    try {
+      await moverLeadParaEtapa(lead.id, novoStageId);
+      await onLeadMoved();
+    } catch (err) {
+      window.alert(err.message || "Não foi possível mover o lead.");
+    } finally {
+      setMovendo(false);
+    }
+  };
+
+  const handleExcluir = async () => {
+    if (!window.confirm(`Excluir o lead "${lead.empresa}"? Isso também apaga follow-ups, propostas e a linha do tempo dele. Não tem como desfazer.`)) return;
+    setExcluindo(true);
+    setErroExclusao(null);
+    try {
+      await excluirLead(lead.id);
+      await onLeadDeleted();
+    } catch (err) {
+      setErroExclusao(err.message || "Não foi possível excluir o lead.");
+      setExcluindo(false);
+    }
+  };
+
   return (
     <div>
       <button className="gm-back-btn" onClick={onBack}><ArrowLeft size={15} /> Voltar para leads</button>
+
+      {erroExclusao && (
+        <div style={{ fontSize: 12.5, color: "var(--danger)", background: "var(--danger-tint)", padding: "9px 11px", borderRadius: 8, marginBottom: 12 }}>
+          {erroExclusao}
+        </div>
+      )}
 
       <div className="gm-detail-header">
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <h1 style={{ fontSize: 21 }}>{lead.empresa}</h1>
-            {stageBadge(lead.stage)}
+            <select
+              className="gm-input"
+              style={{ width: "auto", padding: "4px 8px", fontSize: 12, fontWeight: 600 }}
+              value={lead.stageId || ""}
+              disabled={movendo}
+              onChange={(e) => handleMudarEtapa(e.target.value)}
+            >
+              {stages.map((s) => <option key={s.id} value={s.id}>{s.nome}</option>)}
+            </select>
             {jaConvertido && <span className="gm-badge gm-badge-success"><CheckCircle2 size={11} /> Cliente criado</span>}
           </div>
           <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>{lead.contato} · {lead.segmento} · {lead.cidade}</p>
@@ -1039,6 +1083,9 @@ function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicos
               <FileText size={14} /> Gerar proposta
             </button>
           )}
+          <button className="gm-icon-btn" style={{ color: "var(--danger)" }} onClick={handleExcluir} disabled={excluindo} title="Excluir lead">
+            {excluindo ? <Loader2 size={14} className="gm-spin" /> : <Trash2 size={14} />}
+          </button>
         </div>
       </div>
 
@@ -1597,7 +1644,7 @@ function Propostas({ propostas, leads, clientes, onRefresh }) {
                   <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                     <span style={{ fontWeight: 700, fontSize: 13, color: "var(--ink)" }}>{fmtBRL(p.valor)}</span>
                     <span className={`gm-badge ${toneFor(p.status)}`}>{p.status}</span>
-                    <MoreHorizontal size={16} color="var(--text-faint)" />
+                    <PropostaMenu proposta={p} onChanged={onRefresh} />
                   </div>
                 </div>
               ))}
@@ -1605,6 +1652,82 @@ function Propostas({ propostas, leads, clientes, onRefresh }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  MENU DA PROPOSTA (mudar status / excluir)                           */
+/* ------------------------------------------------------------------ */
+
+const PROPOSTA_STATUS_OPCOES = [
+  { chave: "rascunho", label: "Rascunho" },
+  { chave: "enviada", label: "Enviada" },
+  { chave: "negociacao", label: "Negociação" },
+  { chave: "aprovada", label: "Aprovada" },
+  { chave: "perdida", label: "Perdida" },
+];
+
+function PropostaMenu({ proposta, onChanged }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const mudarStatus = async (chave) => {
+    if (chave === proposta.statusChave) { setOpen(false); return; }
+    setBusy(true);
+    try {
+      await atualizarStatusProposta(proposta.id, chave);
+      await onChanged();
+    } catch (err) {
+      window.alert(err.message || "Não foi possível atualizar o status.");
+    } finally {
+      setBusy(false);
+      setOpen(false);
+    }
+  };
+
+  const excluir = async () => {
+    if (!window.confirm(`Excluir a proposta "${proposta.empresa}"? Não tem como desfazer.`)) return;
+    setBusy(true);
+    try {
+      await excluirProposta(proposta.id);
+      await onChanged();
+    } catch (err) {
+      window.alert(err.message || "Não foi possível excluir a proposta.");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ position: "relative" }} ref={wrapRef}>
+      <button className="gm-icon-btn" style={{ width: 28, height: 28, border: "none", background: "transparent" }} onClick={() => setOpen((o) => !o)} disabled={busy}>
+        {busy ? <Loader2 size={15} className="gm-spin" color="var(--text-faint)" /> : <MoreHorizontal size={16} color="var(--text-faint)" />}
+      </button>
+      {open && (
+        <div className="gm-search-dropdown" style={{ right: 0, left: "auto", width: 200, top: "calc(100% + 4px)" }}>
+          <div className="gm-search-group-label">Mudar status</div>
+          {PROPOSTA_STATUS_OPCOES.map((o) => (
+            <div key={o.chave} className="gm-search-result-item" onClick={() => mudarStatus(o.chave)}>
+              <span style={{ fontSize: 13 }}>{o.label}</span>
+              {o.chave === proposta.statusChave && <CheckCircle2 size={13} color="var(--blue)" />}
+            </div>
+          ))}
+          <div style={{ borderTop: "1px solid var(--border)", marginTop: 4, paddingTop: 4 }}>
+            <div className="gm-search-result-item" style={{ color: "var(--danger)" }} onClick={excluir}>
+              <span style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Trash2 size={13} /> Excluir proposta</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2254,6 +2377,19 @@ export default function App() {
     openLead(novoLeadId);
   };
 
+  const handleLeadMoved = async () => {
+    const leadsData = await fetchLeads();
+    setLeads(leadsData);
+  };
+
+  const handleLeadDeleted = async () => {
+    const [leadsData, followUpsData, propostasData] = await Promise.all([fetchLeads(), fetchFollowUps(), fetchPropostas()]);
+    setLeads(leadsData);
+    setFollowUps(followUpsData);
+    setPropostas(propostasData);
+    goTo("leads");
+  };
+
   const handlePropostaCriada = async () => {
     const propostasData = await fetchPropostas();
     setPropostas(propostasData);
@@ -2381,9 +2517,12 @@ export default function App() {
               timelineLoading={timelineLoading}
               proximoFollowUp={proximoFollowUpDoLead}
               servicosCatalog={servicosCatalog}
+              stages={stages}
               onBack={() => goTo("leads")}
               onConverted={handleLeadConverted}
               onPropostaCriada={handlePropostaCriada}
+              onLeadMoved={handleLeadMoved}
+              onLeadDeleted={handleLeadDeleted}
             />
           )}
           {view === "followups" && <FollowUps followUps={followUps} onOpenLead={openLead} onConcluir={handleConcluirFollowUp} />}

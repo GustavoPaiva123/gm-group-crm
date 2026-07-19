@@ -114,6 +114,7 @@ export async function fetchPropostas() {
     id: row.id,
     empresa: row.leads?.empresa ?? row.clientes?.nome ?? "—",
     valor: Number(row.valor ?? 0),
+    statusChave: row.status,
     status: PROPOSTA_STATUS_LABEL[row.status] ?? row.status,
     data: fmtData(row.enviada_em ?? row.created_at),
   }));
@@ -495,5 +496,50 @@ export async function excluirStage(id) {
     throw new Error(`Essa etapa tem ${count} lead(s) nela. Mova os leads para outra etapa antes de excluir.`);
   }
   const { error } = await supabase.from("pipeline_stages").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/* ------------------------------------------------------------------ */
+/*  MOVER / EXCLUIR LEAD                                                */
+/* ------------------------------------------------------------------ */
+
+export async function moverLeadParaEtapa(leadId, stageId) {
+  const { error } = await supabase.from("leads").update({ stage_id: stageId }).eq("id", leadId);
+  if (error) throw error;
+}
+
+export async function excluirLead(leadId) {
+  const { data: lead, error: leadErr } = await supabase
+    .from("leads")
+    .select("convertido_em_cliente_id, empresa")
+    .eq("id", leadId)
+    .single();
+  if (leadErr) throw leadErr;
+
+  if (lead.convertido_em_cliente_id) {
+    throw new Error(`"${lead.empresa}" já foi convertido em cliente — não é possível excluir o lead (o histórico fica preservado). Para remover, exclua o cliente correspondente.`);
+  }
+
+  // lead_servicos e briefings têm ON DELETE CASCADE; follow_ups, propostas e
+  // timeline_eventos não, então precisam ser apagados explicitamente antes.
+  await supabase.from("timeline_eventos").delete().eq("lead_id", leadId);
+  await supabase.from("follow_ups").delete().eq("lead_id", leadId);
+  await supabase.from("propostas").delete().eq("lead_id", leadId);
+
+  const { error } = await supabase.from("leads").delete().eq("id", leadId);
+  if (error) throw error;
+}
+
+/* ------------------------------------------------------------------ */
+/*  GERENCIAR PROPOSTA (mudar status / excluir)                         */
+/* ------------------------------------------------------------------ */
+
+export async function atualizarStatusProposta(id, status) {
+  const { error } = await supabase.from("propostas").update({ status }).eq("id", id);
+  if (error) throw error;
+}
+
+export async function excluirProposta(id) {
+  const { error } = await supabase.from("propostas").delete().eq("id", id);
   if (error) throw error;
 }
