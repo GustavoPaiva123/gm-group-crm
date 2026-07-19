@@ -243,7 +243,8 @@ const CSS = `
 
 /* ---------- Kanban ---------- */
 .gm-kanban { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 10px; margin-top: 18px; }
-.gm-kanban-col { min-width: 250px; flex-shrink: 0; }
+.gm-kanban-col { min-width: 250px; flex-shrink: 0; border-radius: 12px; transition: background 0.12s ease; }
+.gm-kanban-col-dragover { background: var(--blue-tint); outline: 2px dashed var(--blue); outline-offset: -2px; }
 .gm-kanban-col-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 4px 4px 10px;
@@ -794,15 +795,32 @@ function StatCard({ icon, label, value, delta, warn }) {
 /*  LEADS (KANBAN)                                                      */
 /* ------------------------------------------------------------------ */
 
-function LeadsBoard({ leads, stages, servicosCatalog, onOpenLead, onLeadCreated }) {
+function LeadsBoard({ leads, stages, servicosCatalog, onOpenLead, onLeadCreated, onLeadMoved }) {
   const [modalOpen, setModalOpen] = useState(false);
+  const [draggingId, setDraggingId] = useState(null);
+  const [dragOverStageId, setDragOverStageId] = useState(null);
+
+  const handleDrop = async (e, stage) => {
+    e.preventDefault();
+    setDragOverStageId(null);
+    const leadId = e.dataTransfer.getData("text/plain");
+    const lead = leads.find((l) => l.id === leadId);
+    setDraggingId(null);
+    if (!leadId || !lead || lead.stageId === stage.id) return;
+    try {
+      await moverLeadParaEtapa(leadId, stage.id);
+      await onLeadMoved();
+    } catch (err) {
+      window.alert(err.message || "Não foi possível mover o lead.");
+    }
+  };
 
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <h1 style={{ fontSize: 22 }}>Leads</h1>
-          <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>{leads.length} leads no funil comercial</p>
+          <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>{leads.length} leads no funil comercial · arraste um card para mudar de etapa</p>
         </div>
         <button className="gm-btn gm-btn-primary" onClick={() => setModalOpen(true)}><Plus size={15} /> Novo lead</button>
       </div>
@@ -819,14 +837,28 @@ function LeadsBoard({ leads, stages, servicosCatalog, onOpenLead, onLeadCreated 
         {stages.map((stage) => {
           const items = leads.filter((l) => l.stageId === stage.id);
           return (
-            <div className="gm-kanban-col" key={stage.id}>
+            <div
+              className={`gm-kanban-col ${dragOverStageId === stage.id ? "gm-kanban-col-dragover" : ""}`}
+              key={stage.id}
+              onDragOver={(e) => { e.preventDefault(); setDragOverStageId(stage.id); }}
+              onDragLeave={() => setDragOverStageId((cur) => (cur === stage.id ? null : cur))}
+              onDrop={(e) => handleDrop(e, stage)}
+            >
               <div className="gm-kanban-col-head">
                 <span className="gm-kanban-col-title">{stage.nome}</span>
                 <span className="gm-kanban-col-count">{items.length}</span>
               </div>
               <div className="gm-kanban-cards">
                 {items.map((l) => (
-                  <div className="gm-lead-card" key={l.id} onClick={() => onOpenLead(l.id)}>
+                  <div
+                    className="gm-lead-card"
+                    key={l.id}
+                    draggable
+                    onDragStart={(e) => { e.dataTransfer.setData("text/plain", l.id); e.dataTransfer.effectAllowed = "move"; setDraggingId(l.id); }}
+                    onDragEnd={() => { setDraggingId(null); setDragOverStageId(null); }}
+                    onClick={() => onOpenLead(l.id)}
+                    style={{ opacity: draggingId === l.id ? 0.4 : 1, cursor: "grab" }}
+                  >
                     <div className="gm-lead-card-empresa">{l.empresa}</div>
                     <div className="gm-lead-card-contato">{l.contato} · {l.cidade}</div>
                     <div className="gm-lead-card-meta">
@@ -2508,7 +2540,7 @@ export default function App() {
             <Dashboard leads={leads} clientes={clientes} followUps={followUps} recentActivity={recentActivity} stages={stages} nomeExibicao={perfil?.nome || derivarNomeDoEmail(user.email)} onOpenLead={openLead} goTo={goTo} />
           )}
           {view === "leads" && (
-            <LeadsBoard leads={leads} stages={stages} servicosCatalog={servicosCatalog} onOpenLead={openLead} onLeadCreated={handleLeadCreated} />
+            <LeadsBoard leads={leads} stages={stages} servicosCatalog={servicosCatalog} onOpenLead={openLead} onLeadCreated={handleLeadCreated} onLeadMoved={handleLeadMoved} />
           )}
           {view === "leadDetail" && (
             <LeadDetail
