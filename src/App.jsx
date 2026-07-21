@@ -5,13 +5,13 @@ import {
   Calendar, MessageCircle, CheckCircle2, AlertTriangle, TrendingUp,
   ArrowUpRight, X, Menu, ArrowLeft, Mail, Briefcase, Tag, MoreHorizontal,
   DollarSign, Sparkles, Loader2, LogOut, Lock,
-  ClipboardList, Target, Layers, UserCheck, Link2, Trash2
+  ClipboardList, Target, Layers, UserCheck, Link2, Trash2, Pencil
 } from "lucide-react";
 import {
   fetchLeads, fetchClientes, fetchPropostas, fetchFollowUps,
-  fetchTimelineByLead, fetchAtividadeRecente, fetchServicos,
+  fetchTimelineByLead, fetchAtividadeRecente, fetchServicos, criarServico,
   concluirFollowUp, converterLeadEmCliente, fetchPerfilPorEmail,
-  criarLead, fetchBriefingsByLead, criarBriefing, criarCliente, criarProposta,
+  criarLead, atualizarLead, fetchBriefingsByLead, criarBriefing, criarCliente, criarProposta,
   fetchStages, criarStage, atualizarStage, moverStage, excluirStage,
   moverLeadParaEtapa, excluirLead, atualizarStatusProposta, excluirProposta,
 } from "./lib/api";
@@ -795,7 +795,7 @@ function StatCard({ icon, label, value, delta, warn }) {
 /*  LEADS (KANBAN)                                                      */
 /* ------------------------------------------------------------------ */
 
-function LeadsBoard({ leads, stages, servicosCatalog, onOpenLead, onLeadCreated, onLeadMoved }) {
+function LeadsBoard({ leads, stages, servicosCatalog, onOpenLead, onLeadCreated, onLeadMoved, onCatalogChanged }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [draggingId, setDraggingId] = useState(null);
   const [dragOverStageId, setDragOverStageId] = useState(null);
@@ -828,6 +828,7 @@ function LeadsBoard({ leads, stages, servicosCatalog, onOpenLead, onLeadCreated,
       {modalOpen && (
         <NovoLeadModal
           servicosCatalog={servicosCatalog}
+          onCatalogChanged={onCatalogChanged}
           onClose={() => setModalOpen(false)}
           onCreated={(id) => { setModalOpen(false); onLeadCreated(id); }}
         />
@@ -883,7 +884,7 @@ function LeadsBoard({ leads, stages, servicosCatalog, onOpenLead, onLeadCreated,
 /*  MODAL — Novo lead                                                   */
 /* ------------------------------------------------------------------ */
 
-function NovoLeadModal({ servicosCatalog, onClose, onCreated }) {
+function NovoLeadModal({ servicosCatalog, onCatalogChanged, onClose, onCreated }) {
   const [form, setForm] = useState({
     empresa: "", contato: "", whatsapp: "", instagram: "", email: "",
     cidade: "", estado: "", segmento: "", origem: "", valorEstimado: "",
@@ -975,24 +976,12 @@ function NovoLeadModal({ servicosCatalog, onClose, onCreated }) {
             </div>
           </div>
 
-          <div>
-            <div className="gm-info-label" style={{ marginBottom: 6 }}>Serviços de interesse</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {servicosCatalog.map((s) => {
-                const active = form.servicoIds.includes(s.id);
-                return (
-                  <span
-                    key={s.id}
-                    onClick={() => toggleServico(s.id)}
-                    className={`gm-badge ${active ? "gm-badge-blue" : "gm-badge-gray"}`}
-                    style={{ cursor: "pointer", userSelect: "none" }}
-                  >
-                    {active && <CheckCircle2 size={11} />} {s.nome}
-                  </span>
-                );
-              })}
-            </div>
-          </div>
+          <ServicosPicker
+            catalog={servicosCatalog}
+            selectedIds={form.servicoIds}
+            onToggle={toggleServico}
+            onCatalogChanged={onCatalogChanged}
+          />
 
           <div>
             <div className="gm-info-label" style={{ marginBottom: 4 }}>Observações</div>
@@ -1019,13 +1008,146 @@ function NovoLeadModal({ servicosCatalog, onClose, onCreated }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  MODAL — Editar lead                                                 */
+/* ------------------------------------------------------------------ */
+
+function EditarLeadModal({ lead, servicosCatalog, onCatalogChanged, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    empresa: lead.empresa || "", contato: lead.contato || "", whatsapp: lead.whatsapp || "",
+    instagram: lead.instagram || "", email: lead.email || "",
+    cidade: (lead.cidade || "").split(",")[0]?.trim() || "",
+    estado: (lead.cidade || "").split(",")[1]?.trim() || "",
+    segmento: lead.segmento || "", origem: lead.origem || "",
+    valorEstimado: lead.valor ? String(lead.valor) : "",
+    observacoes: lead.obs || "",
+    servicoIds: servicosCatalog.filter((s) => lead.servicos.includes(s.nome)).map((s) => s.id),
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
+  const toggleServico = (id) => {
+    setForm((f) => ({
+      ...f,
+      servicoIds: f.servicoIds.includes(id) ? f.servicoIds.filter((s) => s !== id) : [...f.servicoIds, id],
+    }));
+  };
+
+  const handleSubmit = async () => {
+    if (!form.empresa.trim() || !form.contato.trim()) {
+      setError("Preencha ao menos o nome da empresa e do contato.");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await atualizarLead(lead.id, form);
+      onSaved();
+    } catch (err) {
+      setError(err.message || "Não foi possível salvar as alterações.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(10,23,48,0.45)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20,
+    }}>
+      <div className="gm-card" style={{ width: 560, maxWidth: "100%", maxHeight: "88vh", overflowY: "auto", padding: 26 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+          <div>
+            <p className="gm-eyebrow">Editar lead</p>
+            <h2 style={{ fontSize: 18, marginTop: 4 }}>{lead.empresa}</h2>
+          </div>
+          <button className="gm-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div className="gm-info-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Nome da empresa *</div>
+              <input className="gm-input" value={form.empresa} onChange={set("empresa")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Nome do contato *</div>
+              <input className="gm-input" value={form.contato} onChange={set("contato")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>WhatsApp</div>
+              <input className="gm-input" value={form.whatsapp} onChange={set("whatsapp")} placeholder="(11) 90000-0000" />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Instagram</div>
+              <input className="gm-input" value={form.instagram} onChange={set("instagram")} placeholder="@empresa" />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>E-mail</div>
+              <input className="gm-input" type="email" value={form.email} onChange={set("email")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Cidade</div>
+              <input className="gm-input" value={form.cidade} onChange={set("cidade")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Estado (UF)</div>
+              <input className="gm-input" maxLength={2} value={form.estado} onChange={(e) => setForm((f) => ({ ...f, estado: e.target.value.toUpperCase() }))} placeholder="SP" />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Segmento</div>
+              <input className="gm-input" value={form.segmento} onChange={set("segmento")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Origem do lead</div>
+              <input className="gm-input" value={form.origem} onChange={set("origem")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Valor estimado (R$)</div>
+              <input className="gm-input" type="number" min="0" step="100" value={form.valorEstimado} onChange={set("valorEstimado")} />
+            </div>
+          </div>
+
+          <ServicosPicker
+            catalog={servicosCatalog}
+            selectedIds={form.servicoIds}
+            onToggle={toggleServico}
+            onCatalogChanged={onCatalogChanged}
+          />
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Observações</div>
+            <textarea className="gm-input" rows={3} value={form.observacoes} onChange={set("observacoes")} style={{ resize: "vertical", fontFamily: "inherit" }} />
+          </div>
+
+          {error && (
+            <div style={{ fontSize: 12.5, color: "var(--danger)", background: "var(--danger-tint)", padding: "8px 10px", borderRadius: 8 }}>
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+            <button className="gm-btn gm-btn-ghost" onClick={onClose} disabled={submitting}>Cancelar</button>
+            <button className="gm-btn gm-btn-primary" onClick={handleSubmit} disabled={submitting}>
+              {submitting ? <Loader2 size={14} className="gm-spin" /> : <CheckCircle2 size={14} />}
+              {submitting ? "Salvando..." : "Salvar alterações"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  LEAD DETAIL                                                         */
 /* ------------------------------------------------------------------ */
 
-function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicosCatalog, stages, onBack, onConverted, onPropostaCriada, onLeadMoved, onLeadDeleted }) {
+function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicosCatalog, stages, onBack, onConverted, onPropostaCriada, onLeadMoved, onLeadDeleted, onCatalogChanged, onLeadSaved }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [briefingModalOpen, setBriefingModalOpen] = useState(false);
   const [propostaModalOpen, setPropostaModalOpen] = useState(false);
+  const [editModalOpen, setEditModalOpen] = useState(false);
   const [briefings, setBriefings] = useState([]);
   const [briefingsLoading, setBriefingsLoading] = useState(true);
   const [movendo, setMovendo] = useState(false);
@@ -1102,6 +1224,9 @@ function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicos
           <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>{lead.contato} · {lead.segmento} · {lead.cidade}</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
+          <button className="gm-btn gm-btn-ghost" onClick={() => setEditModalOpen(true)}>
+            <Pencil size={14} /> Editar lead
+          </button>
           <button className="gm-btn gm-btn-ghost" onClick={() => setBriefingModalOpen(true)}>
             <ClipboardList size={14} /> Briefing de descoberta
           </button>
@@ -1229,11 +1354,22 @@ function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicos
         <ConverterEmClienteModal
           lead={lead}
           servicosCatalog={servicosCatalog}
+          onCatalogChanged={onCatalogChanged}
           onClose={() => setModalOpen(false)}
           onConverted={(clienteId) => {
             setModalOpen(false);
             onConverted(clienteId);
           }}
+        />
+      )}
+
+      {editModalOpen && (
+        <EditarLeadModal
+          lead={lead}
+          servicosCatalog={servicosCatalog}
+          onCatalogChanged={onCatalogChanged}
+          onClose={() => setEditModalOpen(false)}
+          onSaved={() => { setEditModalOpen(false); onLeadSaved(); }}
         />
       )}
 
@@ -1262,7 +1398,7 @@ function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicos
 /*  MODAL — Converter lead em cliente (revisão e confirmação)           */
 /* ------------------------------------------------------------------ */
 
-function ConverterEmClienteModal({ lead, servicosCatalog, onClose, onConverted }) {
+function ConverterEmClienteModal({ lead, servicosCatalog, onCatalogChanged, onClose, onConverted }) {
   const [form, setForm] = useState({
     nome: lead.empresa,
     contatoPrincipal: lead.contato,
@@ -1331,24 +1467,13 @@ function ConverterEmClienteModal({ lead, servicosCatalog, onClose, onConverted }
             <input className="gm-input" value={form.contatoPrincipal} onChange={set("contatoPrincipal")} />
           </div>
 
-          <div>
-            <div className="gm-info-label" style={{ marginBottom: 6 }}>Serviços contratados</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {servicosCatalog.map((s) => {
-                const active = form.servicoIds.includes(s.id);
-                return (
-                  <span
-                    key={s.id}
-                    onClick={() => toggleServico(s.id)}
-                    className={`gm-badge ${active ? "gm-badge-blue" : "gm-badge-gray"}`}
-                    style={{ cursor: "pointer", userSelect: "none" }}
-                  >
-                    {active && <CheckCircle2 size={11} />} {s.nome}
-                  </span>
-                );
-              })}
-            </div>
-          </div>
+          <ServicosPicker
+            label="Serviços contratados"
+            catalog={servicosCatalog}
+            selectedIds={form.servicoIds}
+            onToggle={toggleServico}
+            onCatalogChanged={onCatalogChanged}
+          />
 
           <div style={{ display: "flex", gap: 12 }}>
             <div style={{ flex: 1 }}>
@@ -1550,6 +1675,84 @@ function InfoItem({ icon, label, value }) {
         <div className="gm-info-label">{label}</div>
         <div className="gm-info-value">{value}</div>
       </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  SELETOR DE SERVIÇOS (badges + opção de escrever um novo)            */
+/* ------------------------------------------------------------------ */
+
+function ServicosPicker({ label = "Serviços de interesse", catalog, selectedIds, onToggle, onCatalogChanged }) {
+  const [addingNovo, setAddingNovo] = useState(false);
+  const [novoNome, setNovoNome] = useState("");
+  const [criando, setCriando] = useState(false);
+
+  const handleCriar = async () => {
+    if (!novoNome.trim()) return;
+    setCriando(true);
+    try {
+      const novo = await criarServico(novoNome.trim());
+      await onCatalogChanged();
+      onToggle(novo.id);
+      setNovoNome("");
+      setAddingNovo(false);
+    } catch (err) {
+      window.alert(err.message || "Não foi possível adicionar o serviço.");
+    } finally {
+      setCriando(false);
+    }
+  };
+
+  return (
+    <div>
+      <div className="gm-info-label" style={{ marginBottom: 6 }}>{label}</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+        {catalog.map((s) => {
+          const active = selectedIds.includes(s.id);
+          return (
+            <span
+              key={s.id}
+              onClick={() => onToggle(s.id)}
+              className={`gm-badge ${active ? "gm-badge-blue" : "gm-badge-gray"}`}
+              style={{ cursor: "pointer", userSelect: "none" }}
+            >
+              {active && <CheckCircle2 size={11} />} {s.nome}
+            </span>
+          );
+        })}
+        {!addingNovo && (
+          <span
+            onClick={() => setAddingNovo(true)}
+            className="gm-badge gm-badge-gray"
+            style={{ cursor: "pointer", userSelect: "none", borderStyle: "dashed", borderWidth: 1, borderColor: "var(--text-faint)" }}
+          >
+            <Plus size={11} /> Escrever outro
+          </span>
+        )}
+      </div>
+      {addingNovo && (
+        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+          <input
+            className="gm-input"
+            style={{ flex: 1 }}
+            autoFocus
+            placeholder="Nome do novo serviço"
+            value={novoNome}
+            onChange={(e) => setNovoNome(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); handleCriar(); }
+              if (e.key === "Escape") { setAddingNovo(false); setNovoNome(""); }
+            }}
+          />
+          <button className="gm-btn gm-btn-primary" style={{ padding: "8px 12px" }} onClick={handleCriar} disabled={criando || !novoNome.trim()}>
+            {criando ? <Loader2 size={13} className="gm-spin" /> : <CheckCircle2 size={13} />}
+          </button>
+          <button className="gm-btn gm-btn-ghost" style={{ padding: "8px 12px" }} onClick={() => { setAddingNovo(false); setNovoNome(""); }}>
+            <X size={13} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1879,7 +2082,7 @@ function NovaPropostaModal({ leads, clientes, leadFixo, onClose, onCreated }) {
 /*  CLIENTES                                                            */
 /* ------------------------------------------------------------------ */
 
-function Clientes({ clientes, servicosCatalog, onRefresh }) {
+function Clientes({ clientes, servicosCatalog, onRefresh, onCatalogChanged }) {
   const [modalOpen, setModalOpen] = useState(false);
   return (
     <div>
@@ -1894,6 +2097,7 @@ function Clientes({ clientes, servicosCatalog, onRefresh }) {
       {modalOpen && (
         <NovoClienteModal
           servicosCatalog={servicosCatalog}
+          onCatalogChanged={onCatalogChanged}
           onClose={() => setModalOpen(false)}
           onCreated={() => { setModalOpen(false); onRefresh(); }}
         />
@@ -1958,7 +2162,7 @@ function Clientes({ clientes, servicosCatalog, onRefresh }) {
 /*  MODAL — Novo cliente                                                */
 /* ------------------------------------------------------------------ */
 
-function NovoClienteModal({ servicosCatalog, onClose, onCreated }) {
+function NovoClienteModal({ servicosCatalog, onCatalogChanged, onClose, onCreated }) {
   const [form, setForm] = useState({
     nome: "", contatoPrincipal: "", whatsapp: "", instagram: "", email: "",
     cidade: "", estado: "", segmento: "", status: "ativo", valorMensal: "",
@@ -2054,19 +2258,13 @@ function NovoClienteModal({ servicosCatalog, onClose, onCreated }) {
             </div>
           </div>
 
-          <div>
-            <div className="gm-info-label" style={{ marginBottom: 6 }}>Serviços contratados</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {servicosCatalog.map((s) => {
-                const active = form.servicoIds.includes(s.id);
-                return (
-                  <span key={s.id} onClick={() => toggleServico(s.id)} className={`gm-badge ${active ? "gm-badge-blue" : "gm-badge-gray"}`} style={{ cursor: "pointer", userSelect: "none" }}>
-                    {active && <CheckCircle2 size={11} />} {s.nome}
-                  </span>
-                );
-              })}
-            </div>
-          </div>
+          <ServicosPicker
+            label="Serviços contratados"
+            catalog={servicosCatalog}
+            selectedIds={form.servicoIds}
+            onToggle={toggleServico}
+            onCatalogChanged={onCatalogChanged}
+          />
 
           <div>
             <div className="gm-info-label" style={{ marginBottom: 4 }}>Observações</div>
@@ -2432,6 +2630,16 @@ export default function App() {
     setClientes(clientesData);
   };
 
+  const handleServicosCatalogChanged = async () => {
+    const servicos = await fetchServicos();
+    setServicosCatalog(servicos);
+  };
+
+  const handleLeadAtualizado = async () => {
+    const leadsData = await fetchLeads();
+    setLeads(leadsData);
+  };
+
   const handleStagesChanged = async () => {
     // Rebusca leads e follow-ups também: ambos trazem a etapa embutida
     // (nome/cor), que fica desatualizada até recarregar depois de uma edição.
@@ -2540,7 +2748,7 @@ export default function App() {
             <Dashboard leads={leads} clientes={clientes} followUps={followUps} recentActivity={recentActivity} stages={stages} nomeExibicao={perfil?.nome || derivarNomeDoEmail(user.email)} onOpenLead={openLead} goTo={goTo} />
           )}
           {view === "leads" && (
-            <LeadsBoard leads={leads} stages={stages} servicosCatalog={servicosCatalog} onOpenLead={openLead} onLeadCreated={handleLeadCreated} onLeadMoved={handleLeadMoved} />
+            <LeadsBoard leads={leads} stages={stages} servicosCatalog={servicosCatalog} onOpenLead={openLead} onLeadCreated={handleLeadCreated} onLeadMoved={handleLeadMoved} onCatalogChanged={handleServicosCatalogChanged} />
           )}
           {view === "leadDetail" && (
             <LeadDetail
@@ -2555,6 +2763,8 @@ export default function App() {
               onPropostaCriada={handlePropostaCriada}
               onLeadMoved={handleLeadMoved}
               onLeadDeleted={handleLeadDeleted}
+              onCatalogChanged={handleServicosCatalogChanged}
+              onLeadSaved={handleLeadAtualizado}
             />
           )}
           {view === "followups" && <FollowUps followUps={followUps} onOpenLead={openLead} onConcluir={handleConcluirFollowUp} />}
@@ -2562,7 +2772,7 @@ export default function App() {
             <Propostas propostas={propostas} leads={leads} clientes={clientes} onRefresh={handlePropostaCriada} />
           )}
           {view === "clientes" && (
-            <Clientes clientes={clientes} servicosCatalog={servicosCatalog} onRefresh={handleClienteCriado} />
+            <Clientes clientes={clientes} servicosCatalog={servicosCatalog} onRefresh={handleClienteCriado} onCatalogChanged={handleServicosCatalogChanged} />
           )}
           {view === "config" && <Configuracoes user={user} perfil={perfil} stages={stages} onStagesChanged={handleStagesChanged} />}
         </div>

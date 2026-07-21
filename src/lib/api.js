@@ -209,6 +209,23 @@ export async function fetchServicos() {
   return data;
 }
 
+export async function criarServico(nome) {
+  const { data, error } = await supabase
+    .from("servicos")
+    .insert({ nome: nome.trim() })
+    .select()
+    .single();
+  if (error) {
+    // já existe um serviço com esse nome — reaproveita em vez de falhar
+    if (error.code === "23505") {
+      const existente = await supabase.from("servicos").select("*").eq("nome", nome.trim()).single();
+      if (existente.data) return existente.data;
+    }
+    throw error;
+  }
+  return data;
+}
+
 /* ------------------------------------------------------------------ */
 /*  PERFIL DO USUÁRIO LOGADO                                            */
 /* ------------------------------------------------------------------ */
@@ -274,6 +291,44 @@ export async function criarLead({
   });
 
   return lead.id;
+}
+
+export async function atualizarLead(leadId, {
+  empresa, contato, whatsapp, instagram, email, cidade, estado,
+  segmento, origem, valorEstimado, observacoes, servicoIds,
+}) {
+  const { error } = await supabase
+    .from("leads")
+    .update({
+      empresa, contato,
+      whatsapp: whatsapp || null,
+      instagram: instagram || null,
+      email: email || null,
+      cidade: cidade || null,
+      estado: estado || null,
+      segmento: segmento || null,
+      origem: origem || null,
+      valor_estimado: valorEstimado === "" || valorEstimado == null ? null : Number(valorEstimado),
+      observacoes: observacoes || null,
+    })
+    .eq("id", leadId);
+  if (error) throw error;
+
+  // Ressincroniza os serviços de interesse: apaga os vínculos antigos e
+  // recria com a seleção atual — mais simples e confiável que comparar diffs.
+  await supabase.from("lead_servicos").delete().eq("lead_id", leadId);
+  if (servicoIds && servicoIds.length) {
+    const { error: servErr } = await supabase
+      .from("lead_servicos")
+      .insert(servicoIds.map((servico_id) => ({ lead_id: leadId, servico_id })));
+    if (servErr) throw servErr;
+  }
+
+  await supabase.from("timeline_eventos").insert({
+    lead_id: leadId,
+    tipo: "Lead atualizado",
+    descricao: "Informações do lead editadas.",
+  });
 }
 
 /* ------------------------------------------------------------------ */
