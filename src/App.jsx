@@ -10,7 +10,8 @@ import {
 import {
   fetchLeads, fetchClientes, fetchPropostas, fetchFollowUps,
   fetchTimelineByLead, fetchAtividadeRecente, fetchServicos, criarServico,
-  concluirFollowUp, converterLeadEmCliente, fetchPerfilPorEmail,
+  concluirFollowUp, reagendarFollowUp, criarFollowUp, excluirFollowUp,
+  converterLeadEmCliente, fetchPerfilPorEmail,
   criarLead, atualizarLead, fetchBriefingsByLead, criarBriefing, criarCliente, criarProposta,
   fetchStages, criarStage, atualizarStage, moverStage, excluirStage,
   moverLeadParaEtapa, excluirLead, atualizarStatusProposta, excluirProposta,
@@ -1143,11 +1144,12 @@ function EditarLeadModal({ lead, servicosCatalog, onCatalogChanged, onClose, onS
 /*  LEAD DETAIL                                                         */
 /* ------------------------------------------------------------------ */
 
-function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicosCatalog, stages, onBack, onConverted, onPropostaCriada, onLeadMoved, onLeadDeleted, onCatalogChanged, onLeadSaved }) {
+function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicosCatalog, stages, onBack, onConverted, onPropostaCriada, onLeadMoved, onLeadDeleted, onCatalogChanged, onLeadSaved, onFollowUpCriado }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [briefingModalOpen, setBriefingModalOpen] = useState(false);
   const [propostaModalOpen, setPropostaModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
+  const [followUpModalOpen, setFollowUpModalOpen] = useState(false);
   const [briefings, setBriefings] = useState([]);
   const [briefingsLoading, setBriefingsLoading] = useState(true);
   const [movendo, setMovendo] = useState(false);
@@ -1226,6 +1228,9 @@ function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicos
         <div style={{ display: "flex", gap: 8 }}>
           <button className="gm-btn gm-btn-ghost" onClick={() => setEditModalOpen(true)}>
             <Pencil size={14} /> Editar lead
+          </button>
+          <button className="gm-btn gm-btn-ghost" onClick={() => setFollowUpModalOpen(true)}>
+            <Clock size={14} /> Agendar follow-up
           </button>
           <button className="gm-btn gm-btn-ghost" onClick={() => setBriefingModalOpen(true)}>
             <ClipboardList size={14} /> Briefing de descoberta
@@ -1370,6 +1375,14 @@ function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicos
           onCatalogChanged={onCatalogChanged}
           onClose={() => setEditModalOpen(false)}
           onSaved={() => { setEditModalOpen(false); onLeadSaved(); }}
+        />
+      )}
+
+      {followUpModalOpen && (
+        <NovoFollowUpModal
+          leadFixo={lead}
+          onClose={() => setFollowUpModalOpen(false)}
+          onCreated={() => { setFollowUpModalOpen(false); onFollowUpCriado(); }}
         />
       )}
 
@@ -1761,7 +1774,7 @@ function ServicosPicker({ label = "Serviços de interesse", catalog, selectedIds
 /*  FOLLOW-UPS                                                          */
 /* ------------------------------------------------------------------ */
 
-function FollowUps({ followUps, onOpenLead, onConcluir }) {
+function FollowUps({ followUps, leads, clientes, onOpenLead, onConcluir, onChanged }) {
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
@@ -1772,6 +1785,9 @@ function FollowUps({ followUps, onOpenLead, onConcluir }) {
   const proximos = pendentes.filter((f) => f.dataHora >= endOfToday);
 
   const [concluindo, setConcluindo] = useState(null);
+  const [excluindo, setExcluindo] = useState(null);
+  const [novoModalOpen, setNovoModalOpen] = useState(false);
+  const [reagendarAlvo, setReagendarAlvo] = useState(null);
 
   const handleConcluir = async (id) => {
     setConcluindo(id);
@@ -1779,6 +1795,19 @@ function FollowUps({ followUps, onOpenLead, onConcluir }) {
       await onConcluir(id);
     } finally {
       setConcluindo(null);
+    }
+  };
+
+  const handleExcluir = async (f) => {
+    if (!window.confirm(`Excluir o follow-up "${f.titulo}" de ${f.empresa}?`)) return;
+    setExcluindo(f.id);
+    try {
+      await excluirFollowUp(f.id);
+      await onChanged();
+    } catch (err) {
+      window.alert(err.message || "Não foi possível excluir.");
+    } finally {
+      setExcluindo(null);
     }
   };
 
@@ -1798,12 +1827,17 @@ function FollowUps({ followUps, onOpenLead, onConcluir }) {
             </div>
             {f.leadStage ? stageBadge(f.leadStage) : <span className="gm-badge gm-badge-gray">Cliente</span>}
           </div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>{f.titulo}</div>
           <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Follow-up: {f.dataHoraFmt}</div>
           <div className="gm-fu-actions">
             <button className="gm-fu-action primary" disabled={concluindo === f.id} onClick={() => handleConcluir(f.id)}>
               <CheckCircle2 size={12} /> {concluindo === f.id ? "Salvando..." : "Concluído"}
             </button>
+            <button className="gm-fu-action" onClick={() => setReagendarAlvo(f)}>Reagendar</button>
             {f.leadId && <button className="gm-fu-action" onClick={() => onOpenLead(f.leadId)}>Abrir lead</button>}
+            <button className="gm-fu-action" style={{ color: "var(--danger)" }} disabled={excluindo === f.id} onClick={() => handleExcluir(f)}>
+              <Trash2 size={12} />
+            </button>
           </div>
         </div>
       ))}
@@ -1812,12 +1846,183 @@ function FollowUps({ followUps, onOpenLead, onConcluir }) {
 
   return (
     <div>
-      <h1 style={{ fontSize: 22 }}>Follow-ups</h1>
-      <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>Sua central de tarefas comerciais do dia.</p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <h1 style={{ fontSize: 22 }}>Follow-ups</h1>
+          <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>Sua central de tarefas comerciais do dia.</p>
+        </div>
+        <button className="gm-btn gm-btn-primary" onClick={() => setNovoModalOpen(true)}><Plus size={15} /> Novo follow-up</button>
+      </div>
       <div className="gm-fu-cols">
         <Column title="Atrasados" icon={<AlertTriangle size={12} />} items={atrasados} tone="gm-badge-danger" />
         <Column title="Hoje" icon={<Clock size={12} />} items={hoje} tone="gm-badge-warning" />
         <Column title="Próximos dias" icon={<Calendar size={12} />} items={proximos} tone="gm-badge-blue" />
+      </div>
+
+      {novoModalOpen && (
+        <NovoFollowUpModal
+          leads={leads}
+          clientes={clientes}
+          onClose={() => setNovoModalOpen(false)}
+          onCreated={() => { setNovoModalOpen(false); onChanged(); }}
+        />
+      )}
+
+      {reagendarAlvo && (
+        <ReagendarFollowUpModal
+          followUp={reagendarAlvo}
+          onClose={() => setReagendarAlvo(null)}
+          onSaved={() => { setReagendarAlvo(null); onChanged(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  MODAL — Novo follow-up                                              */
+/* ------------------------------------------------------------------ */
+
+function NovoFollowUpModal({ leads, clientes, leadFixo, onClose, onCreated }) {
+  const [vinculoTipo, setVinculoTipo] = useState("lead");
+  const [vinculoId, setVinculoId] = useState(leadFixo ? leadFixo.id : "");
+  const [titulo, setTitulo] = useState("Follow-up comercial");
+  const [dataHora, setDataHora] = useState("");
+  const [observacoes, setObservacoes] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleSubmit = async () => {
+    if (!vinculoId) { setError("Escolha o lead ou cliente."); return; }
+    if (!titulo.trim() || !dataHora) { setError("Preencha o título e a data/hora."); return; }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await criarFollowUp({
+        leadId: vinculoTipo === "lead" ? vinculoId : null,
+        clienteId: vinculoTipo === "cliente" ? vinculoId : null,
+        titulo: titulo.trim(),
+        dataHoraISO: new Date(dataHora).toISOString(),
+        observacoes,
+      });
+      onCreated();
+    } catch (err) {
+      setError(err.message || "Não foi possível agendar o follow-up.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(10,23,48,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }}>
+      <div className="gm-card" style={{ width: 460, maxWidth: "100%", maxHeight: "88vh", overflowY: "auto", padding: 26 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+          <div>
+            <p className="gm-eyebrow">Novo follow-up</p>
+            <h2 style={{ fontSize: 18, marginTop: 4 }}>{leadFixo ? `Agendar para ${leadFixo.empresa}` : "Agendar follow-up"}</h2>
+          </div>
+          <button className="gm-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {!leadFixo && (
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 6 }}>Vincular a</div>
+              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                <span onClick={() => { setVinculoTipo("lead"); setVinculoId(""); }} className={`gm-badge ${vinculoTipo === "lead" ? "gm-badge-blue" : "gm-badge-gray"}`} style={{ cursor: "pointer" }}>Lead</span>
+                <span onClick={() => { setVinculoTipo("cliente"); setVinculoId(""); }} className={`gm-badge ${vinculoTipo === "cliente" ? "gm-badge-blue" : "gm-badge-gray"}`} style={{ cursor: "pointer" }}>Cliente</span>
+              </div>
+              <select className="gm-input" value={vinculoId} onChange={(e) => setVinculoId(e.target.value)}>
+                <option value="">Selecione...</option>
+                {(vinculoTipo === "lead" ? leads : clientes).map((item) => (
+                  <option key={item.id} value={item.id}>{vinculoTipo === "lead" ? item.empresa : item.nome}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Título</div>
+            <input className="gm-input" value={titulo} onChange={(e) => setTitulo(e.target.value)} placeholder="Ex.: Ligar para confirmar orçamento" />
+          </div>
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Data e hora</div>
+            <input className="gm-input" type="datetime-local" value={dataHora} onChange={(e) => setDataHora(e.target.value)} />
+          </div>
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Observações</div>
+            <textarea className="gm-input" rows={2} value={observacoes} onChange={(e) => setObservacoes(e.target.value)} style={{ resize: "vertical", fontFamily: "inherit" }} />
+          </div>
+
+          {error && <div style={{ fontSize: 12.5, color: "var(--danger)", background: "var(--danger-tint)", padding: "8px 10px", borderRadius: 8 }}>{error}</div>}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+            <button className="gm-btn gm-btn-ghost" onClick={onClose} disabled={submitting}>Cancelar</button>
+            <button className="gm-btn gm-btn-primary" onClick={handleSubmit} disabled={submitting}>
+              {submitting ? <Loader2 size={14} className="gm-spin" /> : <Plus size={14} />}
+              {submitting ? "Agendando..." : "Agendar"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  MODAL — Reagendar follow-up                                         */
+/* ------------------------------------------------------------------ */
+
+function ReagendarFollowUpModal({ followUp, onClose, onSaved }) {
+  const paraInputLocal = (d) => {
+    if (!d) return "";
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  const [dataHora, setDataHora] = useState(paraInputLocal(followUp.dataHora));
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleSubmit = async () => {
+    if (!dataHora) { setError("Escolha a nova data e hora."); return; }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await reagendarFollowUp(followUp.id, new Date(dataHora).toISOString());
+      onSaved();
+    } catch (err) {
+      setError(err.message || "Não foi possível reagendar.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(10,23,48,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }}>
+      <div className="gm-card" style={{ width: 380, maxWidth: "100%", padding: 26 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+          <div>
+            <p className="gm-eyebrow">Reagendar</p>
+            <h2 style={{ fontSize: 17, marginTop: 4 }}>{followUp.titulo}</h2>
+            <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 2 }}>{followUp.empresa}</p>
+          </div>
+          <button className="gm-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+
+        <div className="gm-info-label" style={{ marginBottom: 4 }}>Nova data e hora</div>
+        <input className="gm-input" type="datetime-local" value={dataHora} onChange={(e) => setDataHora(e.target.value)} />
+
+        {error && <div style={{ fontSize: 12.5, color: "var(--danger)", background: "var(--danger-tint)", padding: "8px 10px", borderRadius: 8, marginTop: 12 }}>{error}</div>}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+          <button className="gm-btn gm-btn-ghost" onClick={onClose} disabled={submitting}>Cancelar</button>
+          <button className="gm-btn gm-btn-primary" onClick={handleSubmit} disabled={submitting}>
+            {submitting ? <Loader2 size={14} className="gm-spin" /> : <Clock size={14} />}
+            {submitting ? "Salvando..." : "Reagendar"}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -2594,6 +2799,11 @@ export default function App() {
     setFollowUps(followUpsData);
   };
 
+  const handleFollowUpsChanged = async () => {
+    const followUpsData = await fetchFollowUps();
+    setFollowUps(followUpsData);
+  };
+
   const handleLeadConverted = async () => {
     // recarrega leads e clientes para refletir o novo cliente e o lead marcado como convertido
     const [leadsData, clientesData] = await Promise.all([fetchLeads(), fetchClientes()]);
@@ -2765,9 +2975,12 @@ export default function App() {
               onLeadDeleted={handleLeadDeleted}
               onCatalogChanged={handleServicosCatalogChanged}
               onLeadSaved={handleLeadAtualizado}
+              onFollowUpCriado={handleFollowUpsChanged}
             />
           )}
-          {view === "followups" && <FollowUps followUps={followUps} onOpenLead={openLead} onConcluir={handleConcluirFollowUp} />}
+          {view === "followups" && (
+            <FollowUps followUps={followUps} leads={leads} clientes={clientes} onOpenLead={openLead} onConcluir={handleConcluirFollowUp} onChanged={handleFollowUpsChanged} />
+          )}
           {view === "propostas" && (
             <Propostas propostas={propostas} leads={leads} clientes={clientes} onRefresh={handlePropostaCriada} />
           )}

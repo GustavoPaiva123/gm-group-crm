@@ -159,6 +159,27 @@ export async function reagendarFollowUp(id, novaDataHoraISO) {
   if (error) throw error;
 }
 
+export async function criarFollowUp({ leadId, clienteId, titulo, dataHoraISO, observacoes }) {
+  const { error } = await supabase.from("follow_ups").insert({
+    lead_id: leadId || null,
+    cliente_id: clienteId || null,
+    titulo,
+    data_hora: dataHoraISO,
+    observacoes: observacoes || null,
+    status: "pendente",
+  });
+  if (error) throw error;
+
+  const evento = { tipo: "Follow-up agendado", descricao: titulo };
+  if (leadId) await supabase.from("timeline_eventos").insert({ lead_id: leadId, ...evento });
+  else if (clienteId) await supabase.from("timeline_eventos").insert({ cliente_id: clienteId, ...evento });
+}
+
+export async function excluirFollowUp(id) {
+  const { error } = await supabase.from("follow_ups").delete().eq("id", id);
+  if (error) throw error;
+}
+
 /* ------------------------------------------------------------------ */
 /*  TIMELINE (carregada sob demanda, ao abrir um lead)                  */
 /* ------------------------------------------------------------------ */
