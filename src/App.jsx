@@ -5,7 +5,7 @@ import {
   Calendar, MessageCircle, CheckCircle2, AlertTriangle, TrendingUp,
   ArrowUpRight, X, Menu, ArrowLeft, Mail, Briefcase, Tag, MoreHorizontal,
   DollarSign, Sparkles, Loader2, LogOut, Lock,
-  ClipboardList, Target, Layers, UserCheck, Link2, Trash2, Pencil
+  ClipboardList, Target, Layers, UserCheck, Link2, Trash2, Pencil, ShieldCheck, KeyRound, ShieldOff, ShieldAlert
 } from "lucide-react";
 import {
   fetchLeads, fetchClientes, fetchPropostas, fetchFollowUps,
@@ -15,6 +15,8 @@ import {
   criarLead, atualizarLead, fetchBriefingsByLead, criarBriefing, criarCliente, criarProposta,
   fetchStages, criarStage, atualizarStage, moverStage, excluirStage,
   moverLeadParaEtapa, excluirLead, atualizarStatusProposta, excluirProposta,
+  fetchUsuariosAdmin, criarUsuarioAdmin, excluirUsuarioAdmin,
+  alternarStatusUsuarioAdmin, resetarSenhaUsuarioAdmin, atualizarUsuario,
 } from "./lib/api";
 import { useAuth } from "./lib/AuthContext";
 
@@ -32,6 +34,7 @@ const NAV_ITEMS = [
   { key: "followups", label: "Follow-ups", icon: Clock },
   { key: "propostas", label: "Propostas", icon: FileText },
   { key: "clientes", label: "Clientes", icon: Building2 },
+  { key: "usuarios", label: "Usuários", icon: ShieldCheck, adminOnly: true },
   { key: "config", label: "Configurações", icon: Settings },
 ];
 
@@ -64,6 +67,18 @@ const RED_FLAGS = [
   "Muitos decisores ocultos",
   "Escopo que cresce a cada frase",
 ];
+
+// Papéis de acesso do módulo de Administração de Usuários
+const PAPEIS = [
+  { chave: "administrador", label: "Administrador", cor: "danger" },
+  { chave: "gestor", label: "Gestor", cor: "warning" },
+  { chave: "comercial", label: "Comercial", cor: "blue" },
+  { chave: "operacional", label: "Operacional", cor: "gray" },
+  { chave: "visualizador", label: "Visualizador", cor: "gray" },
+];
+function papelInfo(chave) {
+  return PAPEIS.find((p) => p.chave === chave) || { label: chave, cor: "gray" };
+}
 
 /* ------------------------------------------------------------------ */
 /*  STYLES                                                             */
@@ -2495,6 +2510,415 @@ function NovoClienteModal({ servicosCatalog, onCatalogChanged, onClose, onCreate
 /*  CONFIGURAÇÕES                                                       */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/*  ADMINISTRAÇÃO DE USUÁRIOS                                           */
+/* ------------------------------------------------------------------ */
+
+function AdminUsuarios({ perfilAtualId }) {
+  const [usuarios, setUsuarios] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busca, setBusca] = useState("");
+  const [filtroPapel, setFiltroPapel] = useState("todos");
+  const [filtroStatus, setFiltroStatus] = useState("todos");
+  const [pagina, setPagina] = useState(1);
+  const porPagina = 10;
+
+  const [novoModalOpen, setNovoModalOpen] = useState(false);
+  const [editarAlvo, setEditarAlvo] = useState(null);
+  const [acaoEmAndamento, setAcaoEmAndamento] = useState(null);
+  const [senhaGerada, setSenhaGerada] = useState(null);
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await fetchUsuariosAdmin();
+      setUsuarios(data);
+    } catch (err) {
+      setError(err.message || "Não foi possível carregar os usuários.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const filtrados = usuarios.filter((u) => {
+    const q = busca.trim().toLowerCase();
+    const matchBusca = !q || u.nome.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+    const matchPapel = filtroPapel === "todos" || u.papel === filtroPapel;
+    const matchStatus = filtroStatus === "todos" || u.status === filtroStatus;
+    return matchBusca && matchPapel && matchStatus;
+  });
+
+  const totalPaginas = Math.max(1, Math.ceil(filtrados.length / porPagina));
+  const paginaSegura = Math.min(pagina, totalPaginas);
+  const visiveis = filtrados.slice((paginaSegura - 1) * porPagina, paginaSegura * porPagina);
+
+  const handleToggleStatus = async (u) => {
+    const ativando = u.status !== "ativo";
+    if (!window.confirm(`Quer ${ativando ? "ativar" : "desativar"} o acesso de "${u.nome}"?${!ativando ? " Ele não vai mais conseguir entrar no CRM." : ""}`)) return;
+    setAcaoEmAndamento(u.id);
+    try {
+      await alternarStatusUsuarioAdmin(u.id, ativando);
+      await carregar();
+    } catch (err) {
+      window.alert(err.message || "Não foi possível alterar o status.");
+    } finally {
+      setAcaoEmAndamento(null);
+    }
+  };
+
+  const handleResetSenha = async (u) => {
+    if (!window.confirm(`Gerar uma nova senha temporária para "${u.nome}"? A senha atual dele para de funcionar imediatamente.`)) return;
+    setAcaoEmAndamento(u.id);
+    try {
+      const senha = await resetarSenhaUsuarioAdmin(u.id);
+      setSenhaGerada({ nome: u.nome, email: u.email, senha });
+    } catch (err) {
+      window.alert(err.message || "Não foi possível redefinir a senha.");
+    } finally {
+      setAcaoEmAndamento(null);
+    }
+  };
+
+  const handleExcluir = async (u) => {
+    if (!window.confirm(`Excluir "${u.nome}" (${u.email}) definitivamente? Essa ação não pode ser desfeita — o login dele é apagado.`)) return;
+    setAcaoEmAndamento(u.id);
+    try {
+      await excluirUsuarioAdmin(u.id);
+      await carregar();
+    } catch (err) {
+      window.alert(err.message || "Não foi possível excluir.");
+      setAcaoEmAndamento(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>
+        <Loader2 size={16} className="gm-spin" /> Carregando usuários...
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <h1 style={{ fontSize: 22 }}>Usuários</h1>
+          <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>{usuarios.length} usuários com acesso ao CRM.</p>
+        </div>
+        <button className="gm-btn gm-btn-primary" onClick={() => setNovoModalOpen(true)}><Plus size={15} /> Novo usuário</button>
+      </div>
+
+      {error && <div style={{ fontSize: 12.5, color: "var(--danger)", background: "var(--danger-tint)", padding: "9px 11px", borderRadius: 8, marginTop: 14 }}>{error}</div>}
+
+      <div style={{ display: "flex", gap: 10, marginTop: 18, flexWrap: "wrap" }}>
+        <div className="gm-search" style={{ width: 260 }}>
+          <Search size={14} />
+          <input
+            value={busca}
+            onChange={(e) => { setBusca(e.target.value); setPagina(1); }}
+            placeholder="Buscar por nome ou e-mail..."
+            style={{ border: "none", outline: "none", background: "transparent", font: "inherit", color: "inherit", width: "100%" }}
+          />
+        </div>
+        <select className="gm-input" style={{ width: "auto" }} value={filtroPapel} onChange={(e) => { setFiltroPapel(e.target.value); setPagina(1); }}>
+          <option value="todos">Todos os papéis</option>
+          {PAPEIS.map((p) => <option key={p.chave} value={p.chave}>{p.label}</option>)}
+        </select>
+        <select className="gm-input" style={{ width: "auto" }} value={filtroStatus} onChange={(e) => { setFiltroStatus(e.target.value); setPagina(1); }}>
+          <option value="todos">Todos os status</option>
+          <option value="ativo">Ativo</option>
+          <option value="inativo">Inativo</option>
+        </select>
+      </div>
+
+      <div className="gm-card" style={{ marginTop: 16, overflowX: "auto" }}>
+        <table className="gm-table">
+          <thead>
+            <tr>
+              <th>Usuário</th>
+              <th>Cargo</th>
+              <th>Papel</th>
+              <th>Status</th>
+              <th>Criado em</th>
+              <th>Último acesso</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {visiveis.map((u) => {
+              const pInfo = papelInfo(u.papel);
+              const ehVoce = u.id === perfilAtualId;
+              const ocupado = acaoEmAndamento === u.id;
+              return (
+                <tr key={u.id}>
+                  <td>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <Avatar name={u.nome} />
+                      <div>
+                        <div style={{ fontWeight: 700 }}>{u.nome} {ehVoce && <span style={{ fontWeight: 500, color: "var(--text-faint)" }}>(você)</span>}</div>
+                        <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{u.email}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td style={{ color: "var(--text-muted)" }}>{u.cargo || "—"}</td>
+                  <td><span className={`gm-badge ${CORES_BADGE[pInfo.cor]}`}>{pInfo.label}</span></td>
+                  <td><span className={`gm-badge ${u.status === "ativo" ? "gm-badge-success" : "gm-badge-danger"}`}>{u.status === "ativo" ? "Ativo" : "Inativo"}</span></td>
+                  <td style={{ color: "var(--text-muted)", fontSize: 12.5 }}>{u.criadoEm}</td>
+                  <td style={{ color: "var(--text-muted)", fontSize: 12.5 }}>{u.ultimoAcesso}</td>
+                  <td>
+                    <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+                      <button className="gm-icon-btn" style={{ width: 28, height: 28 }} title="Editar" onClick={() => setEditarAlvo(u)}><Pencil size={13} /></button>
+                      <button className="gm-icon-btn" style={{ width: 28, height: 28 }} title="Redefinir senha" disabled={ocupado} onClick={() => handleResetSenha(u)}><KeyRound size={13} /></button>
+                      <button className="gm-icon-btn" style={{ width: 28, height: 28 }} title={u.status === "ativo" ? "Desativar" : "Ativar"} disabled={ehVoce || ocupado} onClick={() => handleToggleStatus(u)}>
+                        {u.status === "ativo" ? <ShieldOff size={13} /> : <ShieldCheck size={13} />}
+                      </button>
+                      <button className="gm-icon-btn" style={{ width: 28, height: 28, color: "var(--danger)" }} title="Excluir" disabled={ehVoce || ocupado} onClick={() => handleExcluir(u)}><Trash2 size={13} /></button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+            {visiveis.length === 0 && (
+              <tr><td colSpan={7} style={{ textAlign: "center", padding: 24, color: "var(--text-faint)", fontSize: 12.5 }}>Nenhum usuário encontrado.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {totalPaginas > 1 && (
+        <div style={{ display: "flex", justifyContent: "center", gap: 10, alignItems: "center", marginTop: 14 }}>
+          <button className="gm-btn gm-btn-ghost" disabled={paginaSegura === 1} onClick={() => setPagina((p) => p - 1)}>Anterior</button>
+          <span style={{ fontSize: 12.5, color: "var(--text-muted)" }}>Página {paginaSegura} de {totalPaginas}</span>
+          <button className="gm-btn gm-btn-ghost" disabled={paginaSegura === totalPaginas} onClick={() => setPagina((p) => p + 1)}>Próxima</button>
+        </div>
+      )}
+
+      {novoModalOpen && (
+        <NovoUsuarioModal onClose={() => setNovoModalOpen(false)} onCreated={() => { setNovoModalOpen(false); carregar(); }} />
+      )}
+      {editarAlvo && (
+        <EditarUsuarioModal usuario={editarAlvo} onClose={() => setEditarAlvo(null)} onSaved={() => { setEditarAlvo(null); carregar(); }} />
+      )}
+      {senhaGerada && (
+        <SenhaTemporariaModal info={senhaGerada} onClose={() => setSenhaGerada(null)} />
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  MODAL — Novo usuário                                                */
+/* ------------------------------------------------------------------ */
+
+function NovoUsuarioModal({ onClose, onCreated }) {
+  const [form, setForm] = useState({ nome: "", email: "", cargo: "", papel: "comercial", senha: "" });
+  const [mostrarSenha, setMostrarSenha] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
+
+  const gerarSenha = () => {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+    let s = "";
+    for (let i = 0; i < 12; i++) s += chars[Math.floor(Math.random() * chars.length)];
+    setForm((f) => ({ ...f, senha: s }));
+    setMostrarSenha(true);
+  };
+
+  const handleSubmit = async () => {
+    if (!form.nome.trim() || !form.email.trim() || !form.papel || !form.senha) {
+      setError("Preencha nome, e-mail, papel e senha.");
+      return;
+    }
+    if (form.senha.length < 6) { setError("A senha precisa ter pelo menos 6 caracteres."); return; }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await criarUsuarioAdmin(form);
+      onCreated();
+    } catch (err) {
+      setError(err.message || "Não foi possível criar o usuário.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(10,23,48,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }}>
+      <div className="gm-card" style={{ width: 460, maxWidth: "100%", maxHeight: "88vh", overflowY: "auto", padding: 26 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+          <div>
+            <p className="gm-eyebrow">Novo usuário</p>
+            <h2 style={{ fontSize: 18, marginTop: 4 }}>Dar acesso ao CRM</h2>
+          </div>
+          <button className="gm-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Nome *</div>
+            <input className="gm-input" value={form.nome} onChange={set("nome")} />
+          </div>
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>E-mail *</div>
+            <input className="gm-input" type="email" value={form.email} onChange={set("email")} placeholder="pessoa@exemplo.com" />
+          </div>
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Cargo</div>
+            <input className="gm-input" value={form.cargo} onChange={set("cargo")} placeholder="Ex.: Analista de Marketing" />
+          </div>
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Papel *</div>
+            <select className="gm-input" value={form.papel} onChange={set("papel")}>
+              {PAPEIS.map((p) => <option key={p.chave} value={p.chave}>{p.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Senha inicial *</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <input className="gm-input" type={mostrarSenha ? "text" : "password"} value={form.senha} onChange={set("senha")} placeholder="Mínimo 6 caracteres" style={{ flex: 1 }} />
+              <button type="button" className="gm-btn gm-btn-ghost" onClick={() => setMostrarSenha((s) => !s)}>{mostrarSenha ? "Ocultar" : "Ver"}</button>
+              <button type="button" className="gm-btn gm-btn-ghost" onClick={gerarSenha}>Gerar</button>
+            </div>
+            <p style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>Compartilhe essa senha com a pessoa por um canal seguro — ela pode ser trocada depois.</p>
+          </div>
+
+          {error && <div style={{ fontSize: 12.5, color: "var(--danger)", background: "var(--danger-tint)", padding: "8px 10px", borderRadius: 8 }}>{error}</div>}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+            <button className="gm-btn gm-btn-ghost" onClick={onClose} disabled={submitting}>Cancelar</button>
+            <button className="gm-btn gm-btn-primary" onClick={handleSubmit} disabled={submitting}>
+              {submitting ? <Loader2 size={14} className="gm-spin" /> : <Plus size={14} />}
+              {submitting ? "Criando..." : "Criar usuário"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  MODAL — Editar usuário                                              */
+/* ------------------------------------------------------------------ */
+
+function EditarUsuarioModal({ usuario, onClose, onSaved }) {
+  const [form, setForm] = useState({ nome: usuario.nome, cargo: usuario.cargo || "", papel: usuario.papel });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
+
+  const handleSubmit = async () => {
+    if (!form.nome.trim()) { setError("O nome não pode ficar em branco."); return; }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await atualizarUsuario(usuario.id, form);
+      onSaved();
+    } catch (err) {
+      setError(err.message || "Não foi possível salvar.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(10,23,48,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }}>
+      <div className="gm-card" style={{ width: 420, maxWidth: "100%", padding: 26 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+          <div>
+            <p className="gm-eyebrow">Editar usuário</p>
+            <h2 style={{ fontSize: 18, marginTop: 4 }}>{usuario.nome}</h2>
+          </div>
+          <button className="gm-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>E-mail (login)</div>
+            <input className="gm-input" value={usuario.email} disabled />
+          </div>
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Nome</div>
+            <input className="gm-input" value={form.nome} onChange={set("nome")} />
+          </div>
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Cargo</div>
+            <input className="gm-input" value={form.cargo} onChange={set("cargo")} />
+          </div>
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Papel</div>
+            <select className="gm-input" value={form.papel} onChange={set("papel")}>
+              {PAPEIS.map((p) => <option key={p.chave} value={p.chave}>{p.label}</option>)}
+            </select>
+          </div>
+
+          {error && <div style={{ fontSize: 12.5, color: "var(--danger)", background: "var(--danger-tint)", padding: "8px 10px", borderRadius: 8 }}>{error}</div>}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+            <button className="gm-btn gm-btn-ghost" onClick={onClose} disabled={submitting}>Cancelar</button>
+            <button className="gm-btn gm-btn-primary" onClick={handleSubmit} disabled={submitting}>
+              {submitting ? <Loader2 size={14} className="gm-spin" /> : <CheckCircle2 size={14} />}
+              {submitting ? "Salvando..." : "Salvar"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  MODAL — Senha temporária gerada                                     */
+/* ------------------------------------------------------------------ */
+
+function SenhaTemporariaModal({ info, onClose }) {
+  const [copiado, setCopiado] = useState(false);
+
+  const copiar = async () => {
+    try {
+      await navigator.clipboard.writeText(info.senha);
+      setCopiado(true);
+      setTimeout(() => setCopiado(false), 2000);
+    } catch {
+      // clipboard indisponível — a pessoa pode selecionar e copiar manualmente
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(10,23,48,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }}>
+      <div className="gm-card" style={{ width: 400, maxWidth: "100%", padding: 26 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+          <div>
+            <p className="gm-eyebrow">Senha redefinida</p>
+            <h2 style={{ fontSize: 17, marginTop: 4 }}>{info.nome}</h2>
+          </div>
+          <button className="gm-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+        <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginBottom: 14 }}>
+          Essa senha só aparece agora — copie e envie para <strong>{info.email}</strong> por um canal seguro.
+        </p>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ flex: 1, fontFamily: "monospace", fontSize: 15, fontWeight: 700, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px", letterSpacing: 1 }}>
+            {info.senha}
+          </div>
+          <button className="gm-btn gm-btn-primary" onClick={copiar}>{copiado ? <CheckCircle2 size={14} /> : <ClipboardList size={14} />} {copiado ? "Copiado" : "Copiar"}</button>
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
+          <button className="gm-btn gm-btn-ghost" onClick={onClose}>Fechar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Configuracoes({ user, perfil, stages, onStagesChanged }) {
   const [toggles, setToggles] = useState({ notif: true, resumo: true, whatsapp: false });
   const toggle = (k) => setToggles((t) => ({ ...t, [k]: !t[k] }));
@@ -2860,6 +3284,8 @@ export default function App() {
   };
 
   const activeNavKey = view === "leadDetail" ? "leads" : view;
+  const ehAdministrador = perfil?.papel === "administrador";
+  const navItemsVisiveis = NAV_ITEMS.filter((item) => !item.adminOnly || ehAdministrador);
 
   if (authLoading) {
     return (
@@ -2916,7 +3342,7 @@ export default function App() {
           </div>
         </div>
         <nav className="gm-nav">
-          {NAV_ITEMS.map((item) => (
+          {navItemsVisiveis.map((item) => (
             <button
               key={item.key}
               className={`gm-nav-item ${activeNavKey === item.key ? "active" : ""}`}
@@ -2987,12 +3413,25 @@ export default function App() {
           {view === "clientes" && (
             <Clientes clientes={clientes} servicosCatalog={servicosCatalog} onRefresh={handleClienteCriado} onCatalogChanged={handleServicosCatalogChanged} />
           )}
+          {view === "usuarios" && (
+            ehAdministrador ? (
+              <AdminUsuarios perfilAtualId={user.id} />
+            ) : (
+              <div className="gm-card" style={{ padding: 28, maxWidth: 440, margin: "40px auto", textAlign: "center" }}>
+                <ShieldAlert size={22} color="var(--danger)" />
+                <h2 style={{ fontSize: 16, marginTop: 10 }}>Acesso restrito</h2>
+                <p style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 8 }}>
+                  Você não tem permissão para acessar a Administração de Usuários — essa área é exclusiva de Administradores.
+                </p>
+              </div>
+            )
+          )}
           {view === "config" && <Configuracoes user={user} perfil={perfil} stages={stages} onStagesChanged={handleStagesChanged} />}
         </div>
       </div>
 
       <nav className="gm-bottom-nav">
-        {NAV_ITEMS.map((item) => (
+        {navItemsVisiveis.map((item) => (
           <button
             key={item.key}
             className={`gm-bottom-nav-item ${activeNavKey === item.key ? "active" : ""}`}

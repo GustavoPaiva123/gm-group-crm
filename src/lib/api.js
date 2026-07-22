@@ -619,3 +619,66 @@ export async function excluirProposta(id) {
   const { error } = await supabase.from("propostas").delete().eq("id", id);
   if (error) throw error;
 }
+
+/* ------------------------------------------------------------------ */
+/*  ADMINISTRAÇÃO DE USUÁRIOS                                           */
+/*  Operações que tocam a autenticação (criar login, excluir, resetar   */
+/*  senha, ativar/desativar) passam pela Edge Function `admin-users`,   */
+/*  que roda no servidor do Supabase com a chave mestra — nunca exposta */
+/*  no navegador. A função em si confere que quem chama é administrador.*/
+/* ------------------------------------------------------------------ */
+
+const EDGE_FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
+
+async function chamarAdminUsers(payload) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData?.session?.access_token;
+  if (!token) throw new Error("Sessão expirada — faça login novamente.");
+
+  const res = await fetch(`${EDGE_FUNCTIONS_URL}/admin-users`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Erro (${res.status})`);
+  return body;
+}
+
+export async function fetchUsuariosAdmin() {
+  const { usuarios } = await chamarAdminUsers({ action: "list" });
+  return usuarios.map((u) => ({
+    id: u.id,
+    nome: u.nome,
+    email: u.email,
+    cargo: u.cargo || "",
+    papel: u.papel,
+    status: u.status,
+    criadoEm: fmtData(u.created_at),
+    ultimoAcesso: u.ultimo_acesso ? new Date(u.ultimo_acesso).toLocaleString("pt-BR") : "Nunca acessou",
+  }));
+}
+
+export async function criarUsuarioAdmin({ nome, email, cargo, papel, senha }) {
+  return chamarAdminUsers({ action: "create", nome, email, cargo, papel, senha });
+}
+
+export async function excluirUsuarioAdmin(id) {
+  return chamarAdminUsers({ action: "delete", id });
+}
+
+export async function alternarStatusUsuarioAdmin(id, ativo) {
+  return chamarAdminUsers({ action: "toggle_status", id, ativo });
+}
+
+export async function resetarSenhaUsuarioAdmin(id) {
+  const { senha_temporaria } = await chamarAdminUsers({ action: "reset_password", id });
+  return senha_temporaria;
+}
+
+// Edição de nome/cargo/papel é um UPDATE simples na tabela — protegido
+// diretamente por RLS (só administrador consegue), sem precisar da Edge Function.
+export async function atualizarUsuario(id, { nome, cargo, papel }) {
+  const { error } = await supabase.from("usuarios").update({ nome, cargo, papel }).eq("id", id);
+  if (error) throw error;
+}
