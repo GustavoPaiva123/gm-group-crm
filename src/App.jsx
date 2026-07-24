@@ -80,6 +80,21 @@ function papelInfo(chave) {
   return PAPEIS.find((p) => p.chave === chave) || { label: chave, cor: "gray" };
 }
 
+// Espelha a matriz de permissões aplicada no banco (RLS) — usada aqui só
+// pra já esconder/desabilitar os botões certos na interface. A permissão
+// de verdade é sempre garantida pelo Supabase, mesmo que alguém tente
+// burlar a tela.
+const PERMISSOES_ESCRITA = {
+  leads: ["administrador", "gestor", "comercial"],
+  propostas: ["administrador", "gestor", "comercial"],
+  clientes: ["administrador", "gestor", "comercial", "operacional"],
+  followups: ["administrador", "gestor", "comercial", "operacional"],
+  pipeline: ["administrador", "gestor"],
+};
+function podeEscrever(papel, recurso) {
+  return (PERMISSOES_ESCRITA[recurso] || []).includes(papel);
+}
+
 /* ------------------------------------------------------------------ */
 /*  STYLES                                                             */
 /* ------------------------------------------------------------------ */
@@ -811,12 +826,13 @@ function StatCard({ icon, label, value, delta, warn }) {
 /*  LEADS (KANBAN)                                                      */
 /* ------------------------------------------------------------------ */
 
-function LeadsBoard({ leads, stages, servicosCatalog, onOpenLead, onLeadCreated, onLeadMoved, onCatalogChanged }) {
+function LeadsBoard({ leads, stages, servicosCatalog, onOpenLead, onLeadCreated, onLeadMoved, onCatalogChanged, podeEscrever }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [draggingId, setDraggingId] = useState(null);
   const [dragOverStageId, setDragOverStageId] = useState(null);
 
   const handleDrop = async (e, stage) => {
+    if (!podeEscrever) return;
     e.preventDefault();
     setDragOverStageId(null);
     const leadId = e.dataTransfer.getData("text/plain");
@@ -836,9 +852,11 @@ function LeadsBoard({ leads, stages, servicosCatalog, onOpenLead, onLeadCreated,
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <h1 style={{ fontSize: 22 }}>Leads</h1>
-          <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>{leads.length} leads no funil comercial · arraste um card para mudar de etapa</p>
+          <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>
+            {leads.length} leads no funil comercial{podeEscrever ? " · arraste um card para mudar de etapa" : ""}
+          </p>
         </div>
-        <button className="gm-btn gm-btn-primary" onClick={() => setModalOpen(true)}><Plus size={15} /> Novo lead</button>
+        {podeEscrever && <button className="gm-btn gm-btn-primary" onClick={() => setModalOpen(true)}><Plus size={15} /> Novo lead</button>}
       </div>
 
       {modalOpen && (
@@ -857,7 +875,7 @@ function LeadsBoard({ leads, stages, servicosCatalog, onOpenLead, onLeadCreated,
             <div
               className={`gm-kanban-col ${dragOverStageId === stage.id ? "gm-kanban-col-dragover" : ""}`}
               key={stage.id}
-              onDragOver={(e) => { e.preventDefault(); setDragOverStageId(stage.id); }}
+              onDragOver={(e) => { if (podeEscrever) { e.preventDefault(); setDragOverStageId(stage.id); } }}
               onDragLeave={() => setDragOverStageId((cur) => (cur === stage.id ? null : cur))}
               onDrop={(e) => handleDrop(e, stage)}
             >
@@ -870,11 +888,11 @@ function LeadsBoard({ leads, stages, servicosCatalog, onOpenLead, onLeadCreated,
                   <div
                     className="gm-lead-card"
                     key={l.id}
-                    draggable
-                    onDragStart={(e) => { e.dataTransfer.setData("text/plain", l.id); e.dataTransfer.effectAllowed = "move"; setDraggingId(l.id); }}
+                    draggable={podeEscrever}
+                    onDragStart={(e) => { if (!podeEscrever) return; e.dataTransfer.setData("text/plain", l.id); e.dataTransfer.effectAllowed = "move"; setDraggingId(l.id); }}
                     onDragEnd={() => { setDraggingId(null); setDragOverStageId(null); }}
                     onClick={() => onOpenLead(l.id)}
-                    style={{ opacity: draggingId === l.id ? 0.4 : 1, cursor: "grab" }}
+                    style={{ opacity: draggingId === l.id ? 0.4 : 1, cursor: podeEscrever ? "grab" : "pointer" }}
                   >
                     <div className="gm-lead-card-empresa">{l.empresa}</div>
                     <div className="gm-lead-card-contato">{l.contato} · {l.cidade}</div>
@@ -1159,7 +1177,7 @@ function EditarLeadModal({ lead, servicosCatalog, onCatalogChanged, onClose, onS
 /*  LEAD DETAIL                                                         */
 /* ------------------------------------------------------------------ */
 
-function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicosCatalog, stages, onBack, onConverted, onPropostaCriada, onLeadMoved, onLeadDeleted, onCatalogChanged, onLeadSaved, onFollowUpCriado }) {
+function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicosCatalog, stages, onBack, onConverted, onPropostaCriada, onLeadMoved, onLeadDeleted, onCatalogChanged, onLeadSaved, onFollowUpCriado, podeEscreverLeads, podeEscreverFollowups }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [briefingModalOpen, setBriefingModalOpen] = useState(false);
   const [propostaModalOpen, setPropostaModalOpen] = useState(false);
@@ -1231,7 +1249,7 @@ function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicos
               className="gm-input"
               style={{ width: "auto", padding: "4px 8px", fontSize: 12, fontWeight: 600 }}
               value={lead.stageId || ""}
-              disabled={movendo}
+              disabled={movendo || !podeEscreverLeads}
               onChange={(e) => handleMudarEtapa(e.target.value)}
             >
               {stages.map((s) => <option key={s.id} value={s.id}>{s.nome}</option>)}
@@ -1241,28 +1259,36 @@ function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicos
           <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>{lead.contato} · {lead.segmento} · {lead.cidade}</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="gm-btn gm-btn-ghost" onClick={() => setEditModalOpen(true)}>
-            <Pencil size={14} /> Editar lead
-          </button>
-          <button className="gm-btn gm-btn-ghost" onClick={() => setFollowUpModalOpen(true)}>
-            <Clock size={14} /> Agendar follow-up
-          </button>
-          <button className="gm-btn gm-btn-ghost" onClick={() => setBriefingModalOpen(true)}>
-            <ClipboardList size={14} /> Briefing de descoberta
-          </button>
-          {podeConverter && !jaConvertido && (
+          {podeEscreverLeads && (
+            <button className="gm-btn gm-btn-ghost" onClick={() => setEditModalOpen(true)}>
+              <Pencil size={14} /> Editar lead
+            </button>
+          )}
+          {podeEscreverFollowups && (
+            <button className="gm-btn gm-btn-ghost" onClick={() => setFollowUpModalOpen(true)}>
+              <Clock size={14} /> Agendar follow-up
+            </button>
+          )}
+          {podeEscreverLeads && (
+            <button className="gm-btn gm-btn-ghost" onClick={() => setBriefingModalOpen(true)}>
+              <ClipboardList size={14} /> Briefing de descoberta
+            </button>
+          )}
+          {podeEscreverLeads && podeConverter && !jaConvertido && (
             <button className="gm-btn gm-btn-primary" onClick={() => setModalOpen(true)}>
               <Building2 size={14} /> Converter em cliente
             </button>
           )}
-          {!podeConverter && (
+          {podeEscreverLeads && !podeConverter && (
             <button className="gm-btn gm-btn-primary" onClick={() => setPropostaModalOpen(true)}>
               <FileText size={14} /> Gerar proposta
             </button>
           )}
-          <button className="gm-icon-btn" style={{ color: "var(--danger)" }} onClick={handleExcluir} disabled={excluindo} title="Excluir lead">
-            {excluindo ? <Loader2 size={14} className="gm-spin" /> : <Trash2 size={14} />}
-          </button>
+          {podeEscreverLeads && (
+            <button className="gm-icon-btn" style={{ color: "var(--danger)" }} onClick={handleExcluir} disabled={excluindo} title="Excluir lead">
+              {excluindo ? <Loader2 size={14} className="gm-spin" /> : <Trash2 size={14} />}
+            </button>
+          )}
         </div>
       </div>
 
@@ -1314,7 +1340,7 @@ function LeadDetail({ lead, timeline, timelineLoading, proximoFollowUp, servicos
       <div style={{ marginTop: 22 }}>
         <div className="gm-section-title" style={{ marginTop: 0 }}>
           <h2 style={{ fontSize: 15 }}>Briefings de descoberta</h2>
-          <span className="gm-eyebrow" style={{ cursor: "pointer" }} onClick={() => setBriefingModalOpen(true)}>+ novo briefing</span>
+          {podeEscreverLeads && <span className="gm-eyebrow" style={{ cursor: "pointer" }} onClick={() => setBriefingModalOpen(true)}>+ novo briefing</span>}
         </div>
 
         {briefingsLoading && <p style={{ fontSize: 12.5, color: "var(--text-faint)" }}>Carregando…</p>}
@@ -1789,7 +1815,7 @@ function ServicosPicker({ label = "Serviços de interesse", catalog, selectedIds
 /*  FOLLOW-UPS                                                          */
 /* ------------------------------------------------------------------ */
 
-function FollowUps({ followUps, leads, clientes, onOpenLead, onConcluir, onChanged }) {
+function FollowUps({ followUps, leads, clientes, onOpenLead, onConcluir, onChanged, podeEscrever }) {
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
@@ -1845,14 +1871,18 @@ function FollowUps({ followUps, leads, clientes, onOpenLead, onConcluir, onChang
           <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>{f.titulo}</div>
           <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Follow-up: {f.dataHoraFmt}</div>
           <div className="gm-fu-actions">
-            <button className="gm-fu-action primary" disabled={concluindo === f.id} onClick={() => handleConcluir(f.id)}>
-              <CheckCircle2 size={12} /> {concluindo === f.id ? "Salvando..." : "Concluído"}
-            </button>
-            <button className="gm-fu-action" onClick={() => setReagendarAlvo(f)}>Reagendar</button>
+            {podeEscrever && (
+              <button className="gm-fu-action primary" disabled={concluindo === f.id} onClick={() => handleConcluir(f.id)}>
+                <CheckCircle2 size={12} /> {concluindo === f.id ? "Salvando..." : "Concluído"}
+              </button>
+            )}
+            {podeEscrever && <button className="gm-fu-action" onClick={() => setReagendarAlvo(f)}>Reagendar</button>}
             {f.leadId && <button className="gm-fu-action" onClick={() => onOpenLead(f.leadId)}>Abrir lead</button>}
-            <button className="gm-fu-action" style={{ color: "var(--danger)" }} disabled={excluindo === f.id} onClick={() => handleExcluir(f)}>
-              <Trash2 size={12} />
-            </button>
+            {podeEscrever && (
+              <button className="gm-fu-action" style={{ color: "var(--danger)" }} disabled={excluindo === f.id} onClick={() => handleExcluir(f)}>
+                <Trash2 size={12} />
+              </button>
+            )}
           </div>
         </div>
       ))}
@@ -1866,7 +1896,7 @@ function FollowUps({ followUps, leads, clientes, onOpenLead, onConcluir, onChang
           <h1 style={{ fontSize: 22 }}>Follow-ups</h1>
           <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>Sua central de tarefas comerciais do dia.</p>
         </div>
-        <button className="gm-btn gm-btn-primary" onClick={() => setNovoModalOpen(true)}><Plus size={15} /> Novo follow-up</button>
+        {podeEscrever && <button className="gm-btn gm-btn-primary" onClick={() => setNovoModalOpen(true)}><Plus size={15} /> Novo follow-up</button>}
       </div>
       <div className="gm-fu-cols">
         <Column title="Atrasados" icon={<AlertTriangle size={12} />} items={atrasados} tone="gm-badge-danger" />
@@ -2047,7 +2077,7 @@ function ReagendarFollowUpModal({ followUp, onClose, onSaved }) {
 /*  PROPOSTAS                                                           */
 /* ------------------------------------------------------------------ */
 
-function Propostas({ propostas, leads, clientes, onRefresh }) {
+function Propostas({ propostas, leads, clientes, onRefresh, podeEscrever }) {
   const [modalOpen, setModalOpen] = useState(false);
   const groups = ["Rascunho", "Enviada", "Negociação", "Aprovada", "Perdida"];
   const toneFor = (s) => ({
@@ -2062,7 +2092,7 @@ function Propostas({ propostas, leads, clientes, onRefresh }) {
           <h1 style={{ fontSize: 22 }}>Propostas</h1>
           <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>Acompanhe cada proposta comercial em andamento.</p>
         </div>
-        <button className="gm-btn gm-btn-primary" onClick={() => setModalOpen(true)}><Plus size={15} /> Nova proposta</button>
+        {podeEscrever && <button className="gm-btn gm-btn-primary" onClick={() => setModalOpen(true)}><Plus size={15} /> Nova proposta</button>}
       </div>
 
       {modalOpen && (
@@ -2099,7 +2129,7 @@ function Propostas({ propostas, leads, clientes, onRefresh }) {
                   <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                     <span style={{ fontWeight: 700, fontSize: 13, color: "var(--ink)" }}>{fmtBRL(p.valor)}</span>
                     <span className={`gm-badge ${toneFor(p.status)}`}>{p.status}</span>
-                    <PropostaMenu proposta={p} onChanged={onRefresh} />
+                    {podeEscrever && <PropostaMenu proposta={p} onChanged={onRefresh} />}
                   </div>
                 </div>
               ))}
@@ -2302,7 +2332,7 @@ function NovaPropostaModal({ leads, clientes, leadFixo, onClose, onCreated }) {
 /*  CLIENTES                                                            */
 /* ------------------------------------------------------------------ */
 
-function Clientes({ clientes, servicosCatalog, onRefresh, onCatalogChanged }) {
+function Clientes({ clientes, servicosCatalog, onRefresh, onCatalogChanged, podeEscrever }) {
   const [modalOpen, setModalOpen] = useState(false);
   return (
     <div>
@@ -2311,7 +2341,7 @@ function Clientes({ clientes, servicosCatalog, onRefresh, onCatalogChanged }) {
           <h1 style={{ fontSize: 22 }}>Clientes</h1>
           <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>{clientes.length} clientes na base da GM Group</p>
         </div>
-        <button className="gm-btn gm-btn-primary" onClick={() => setModalOpen(true)}><Plus size={15} /> Novo cliente</button>
+        {podeEscrever && <button className="gm-btn gm-btn-primary" onClick={() => setModalOpen(true)}><Plus size={15} /> Novo cliente</button>}
       </div>
 
       {modalOpen && (
@@ -2919,7 +2949,7 @@ function SenhaTemporariaModal({ info, onClose }) {
   );
 }
 
-function Configuracoes({ user, perfil, stages, onStagesChanged }) {
+function Configuracoes({ user, perfil, stages, onStagesChanged, podeEditarPipeline }) {
   const [toggles, setToggles] = useState({ notif: true, resumo: true, whatsapp: false });
   const toggle = (k) => setToggles((t) => ({ ...t, [k]: !t[k] }));
   const [stagesModalOpen, setStagesModalOpen] = useState(false);
@@ -2985,7 +3015,7 @@ function Configuracoes({ user, perfil, stages, onStagesChanged }) {
             <div className="gm-config-label">Etapas do funil de leads</div>
             <div className="gm-config-desc">{stages.length} etapas configuradas, de "{stages[0]?.nome}" até "{stages[stages.length - 1]?.nome}".</div>
           </div>
-          <button className="gm-btn gm-btn-ghost" onClick={() => setStagesModalOpen(true)}>Editar etapas</button>
+          {podeEditarPipeline && <button className="gm-btn gm-btn-ghost" onClick={() => setStagesModalOpen(true)}>Editar etapas</button>}
         </div>
       </div>
 
@@ -3286,6 +3316,13 @@ export default function App() {
   const activeNavKey = view === "leadDetail" ? "leads" : view;
   const ehAdministrador = perfil?.papel === "administrador";
   const navItemsVisiveis = NAV_ITEMS.filter((item) => !item.adminOnly || ehAdministrador);
+  const perm = {
+    leads: podeEscrever(perfil?.papel, "leads"),
+    clientes: podeEscrever(perfil?.papel, "clientes"),
+    propostas: podeEscrever(perfil?.papel, "propostas"),
+    followups: podeEscrever(perfil?.papel, "followups"),
+    pipeline: podeEscrever(perfil?.papel, "pipeline"),
+  };
 
   if (authLoading) {
     return (
@@ -3384,7 +3421,7 @@ export default function App() {
             <Dashboard leads={leads} clientes={clientes} followUps={followUps} recentActivity={recentActivity} stages={stages} nomeExibicao={perfil?.nome || derivarNomeDoEmail(user.email)} onOpenLead={openLead} goTo={goTo} />
           )}
           {view === "leads" && (
-            <LeadsBoard leads={leads} stages={stages} servicosCatalog={servicosCatalog} onOpenLead={openLead} onLeadCreated={handleLeadCreated} onLeadMoved={handleLeadMoved} onCatalogChanged={handleServicosCatalogChanged} />
+            <LeadsBoard leads={leads} stages={stages} servicosCatalog={servicosCatalog} onOpenLead={openLead} onLeadCreated={handleLeadCreated} onLeadMoved={handleLeadMoved} onCatalogChanged={handleServicosCatalogChanged} podeEscrever={perm.leads} />
           )}
           {view === "leadDetail" && (
             <LeadDetail
@@ -3402,16 +3439,18 @@ export default function App() {
               onCatalogChanged={handleServicosCatalogChanged}
               onLeadSaved={handleLeadAtualizado}
               onFollowUpCriado={handleFollowUpsChanged}
+              podeEscreverLeads={perm.leads}
+              podeEscreverFollowups={perm.followups}
             />
           )}
           {view === "followups" && (
-            <FollowUps followUps={followUps} leads={leads} clientes={clientes} onOpenLead={openLead} onConcluir={handleConcluirFollowUp} onChanged={handleFollowUpsChanged} />
+            <FollowUps followUps={followUps} leads={leads} clientes={clientes} onOpenLead={openLead} onConcluir={handleConcluirFollowUp} onChanged={handleFollowUpsChanged} podeEscrever={perm.followups} />
           )}
           {view === "propostas" && (
-            <Propostas propostas={propostas} leads={leads} clientes={clientes} onRefresh={handlePropostaCriada} />
+            <Propostas propostas={propostas} leads={leads} clientes={clientes} onRefresh={handlePropostaCriada} podeEscrever={perm.propostas} />
           )}
           {view === "clientes" && (
-            <Clientes clientes={clientes} servicosCatalog={servicosCatalog} onRefresh={handleClienteCriado} onCatalogChanged={handleServicosCatalogChanged} />
+            <Clientes clientes={clientes} servicosCatalog={servicosCatalog} onRefresh={handleClienteCriado} onCatalogChanged={handleServicosCatalogChanged} podeEscrever={perm.clientes} />
           )}
           {view === "usuarios" && (
             ehAdministrador ? (
@@ -3426,7 +3465,7 @@ export default function App() {
               </div>
             )
           )}
-          {view === "config" && <Configuracoes user={user} perfil={perfil} stages={stages} onStagesChanged={handleStagesChanged} />}
+          {view === "config" && <Configuracoes user={user} perfil={perfil} stages={stages} onStagesChanged={handleStagesChanged} podeEditarPipeline={perm.pipeline} />}
         </div>
       </div>
 
