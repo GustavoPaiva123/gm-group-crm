@@ -5,7 +5,8 @@ import {
   Calendar, MessageCircle, CheckCircle2, AlertTriangle, TrendingUp,
   ArrowUpRight, X, Menu, ArrowLeft, Mail, Briefcase, Tag, MoreHorizontal,
   DollarSign, Sparkles, Loader2, LogOut, Lock,
-  ClipboardList, Target, Layers, UserCheck, Link2, Trash2, Pencil, ShieldCheck, KeyRound, ShieldOff, ShieldAlert
+  ClipboardList, Target, Layers, UserCheck, Link2, Trash2, Pencil, ShieldCheck, KeyRound, ShieldOff, ShieldAlert,
+  Crosshair, Globe
 } from "lucide-react";
 import {
   fetchLeads, fetchClientes, fetchPropostas, fetchFollowUps,
@@ -17,6 +18,8 @@ import {
   moverLeadParaEtapa, excluirLead, atualizarStatusProposta, excluirProposta,
   fetchUsuariosAdmin, criarUsuarioAdmin, excluirUsuarioAdmin,
   alternarStatusUsuarioAdmin, resetarSenhaUsuarioAdmin, atualizarUsuario,
+  PROSPECCAO_STATUS, fetchProspeccoes, criarProspeccao, atualizarProspeccao,
+  atualizarStatusProspeccao, excluirProspeccao, converterProspeccaoEmLead,
 } from "./lib/api";
 import { useAuth } from "./lib/AuthContext";
 
@@ -30,6 +33,7 @@ import { useAuth } from "./lib/AuthContext";
 
 const NAV_ITEMS = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { key: "prospeccao", label: "Prospecção", icon: Crosshair },
   { key: "leads", label: "Leads", icon: Rows3 },
   { key: "followups", label: "Follow-ups", icon: Clock },
   { key: "propostas", label: "Propostas", icon: FileText },
@@ -90,6 +94,7 @@ const PERMISSOES_ESCRITA = {
   clientes: ["administrador", "gestor", "comercial", "operacional"],
   followups: ["administrador", "gestor", "comercial", "operacional"],
   pipeline: ["administrador", "gestor"],
+  prospeccao: ["administrador", "gestor", "comercial"],
 };
 function podeEscrever(papel, recurso) {
   return (PERMISSOES_ESCRITA[recurso] || []).includes(papel);
@@ -375,10 +380,10 @@ const CSS = `
   .gm-bottom-nav {
     display: flex; position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
     background: var(--navy); padding: 8px 6px calc(8px + env(safe-area-inset-bottom));
-    justify-content: space-around;
+    justify-content: space-around; overflow-x: auto;
   }
   .gm-bottom-nav-item {
-    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 3px;
     color: rgba(234,240,255,0.55); font-size: 9.5px; font-weight: 600; background: none; border: none; padding: 4px 8px; cursor: pointer;
   }
   .gm-bottom-nav-item.active { color: #fff; }
@@ -460,16 +465,38 @@ function BrandMark({ light = true, className = "gm-brand-mark" }) {
 /* ------------------------------------------------------------------ */
 
 function Login() {
-  const { signIn } = useAuth();
+  const { signIn, enviarEmailRecuperacao, recuperandoSenha, cancelarRecuperacao } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState(null);
+  // Chegou pelo link do e-mail mas sem sessão = link inválido ou expirado
+  const [error, setError] = useState(recuperandoSenha ? "O link de recuperação expirou ou já foi usado. Peça um novo abaixo." : null);
+  const [aviso, setAviso] = useState(null);
+  const [modoRecuperar, setModoRecuperar] = useState(recuperandoSenha);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (recuperandoSenha) cancelarRecuperacao();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
+    setAviso(null);
     setSubmitting(true);
+
+    if (modoRecuperar) {
+      const { error: resetError } = await enviarEmailRecuperacao(email.trim());
+      setSubmitting(false);
+      if (resetError) {
+        setError(resetError.status === 429
+          ? "Muitas tentativas seguidas. Aguarde alguns minutos e tente de novo."
+          : resetError.message);
+        return;
+      }
+      setAviso(`Se ${email.trim()} tiver acesso ao CRM, enviamos um link para definir uma nova senha. Confira a caixa de entrada e o spam.`);
+      return;
+    }
+
     const { error: signInError } = await signIn(email.trim(), password);
     setSubmitting(false);
     if (signInError) {
@@ -479,6 +506,12 @@ function Login() {
           : signInError.message
       );
     }
+  };
+
+  const alternarModo = () => {
+    setModoRecuperar((m) => !m);
+    setError(null);
+    setAviso(null);
   };
 
   return (
@@ -492,6 +525,13 @@ function Login() {
         </div>
 
         {error && <div className="gm-login-error">{error}</div>}
+        {aviso && <div className="gm-login-error" style={{ color: "var(--success)", background: "var(--success-tint)" }}>{aviso}</div>}
+
+        {modoRecuperar && (
+          <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginBottom: 14 }}>
+            Informe seu e-mail de acesso e enviaremos um link para você criar uma nova senha.
+          </p>
+        )}
 
         <form onSubmit={handleSubmit} autoComplete="on">
           <div className="gm-login-field">
@@ -502,23 +542,108 @@ function Login() {
               placeholder="voce@gmgroup.com.br"
             />
           </div>
-          <div className="gm-login-field">
-            <label className="gm-info-label" htmlFor="password">Senha</label>
-            <input
-              id="password" type="password" required autoComplete="current-password"
-              className="gm-input" value={password} onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-            />
-          </div>
+          {!modoRecuperar && (
+            <div className="gm-login-field">
+              <label className="gm-info-label" htmlFor="password">Senha</label>
+              <input
+                id="password" type="password" required autoComplete="current-password"
+                className="gm-input" value={password} onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+              />
+            </div>
+          )}
           <button type="submit" className="gm-btn gm-btn-primary" style={{ width: "100%", justifyContent: "center", marginTop: 6 }} disabled={submitting}>
-            {submitting ? <Loader2 size={14} className="gm-spin" /> : <Lock size={14} />}
-            {submitting ? "Entrando..." : "Entrar"}
+            {submitting ? <Loader2 size={14} className="gm-spin" /> : modoRecuperar ? <Mail size={14} /> : <Lock size={14} />}
+            {modoRecuperar
+              ? (submitting ? "Enviando..." : "Enviar link de recuperação")
+              : (submitting ? "Entrando..." : "Entrar")}
           </button>
         </form>
+
+        <button
+          type="button"
+          onClick={alternarModo}
+          style={{ display: "block", margin: "14px auto 0", background: "none", border: "none", color: "var(--blue)", fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}
+        >
+          {modoRecuperar ? "Voltar para o login" : "Esqueci minha senha"}
+        </button>
 
         <div className="gm-login-footer">
           <Lock size={11} /> Não há cadastro público — contas são criadas pela administração do GM Group.
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  DEFINIR NOVA SENHA (depois de abrir o link de recuperação)          */
+/* ------------------------------------------------------------------ */
+
+function DefinirNovaSenha() {
+  const { user, definirNovaSenha, cancelarRecuperacao } = useAuth();
+  const [senha, setSenha] = useState("");
+  const [confirmacao, setConfirmacao] = useState("");
+  const [error, setError] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    if (senha.length < 8) { setError("A senha precisa ter pelo menos 8 caracteres."); return; }
+    if (senha !== confirmacao) { setError("As duas senhas não são iguais."); return; }
+    setSubmitting(true);
+    const { error: updError } = await definirNovaSenha(senha);
+    setSubmitting(false);
+    if (updError) {
+      setError(updError.code === "same_password"
+        ? "A nova senha precisa ser diferente da anterior."
+        : updError.message);
+    }
+  };
+
+  return (
+    <div className="gm-crm gm-login-page">
+      <style>{CSS}</style>
+      <div className="gm-login-card">
+        <div className="gm-login-brand">
+          <img src="/logo-gm-group.png" alt="GM Group" className="gm-login-brand-mark" />
+          <div className="gm-login-title">Definir nova senha</div>
+          <div className="gm-login-subtitle">{user?.email}</div>
+        </div>
+
+        {error && <div className="gm-login-error">{error}</div>}
+
+        <form onSubmit={handleSubmit}>
+          <input type="email" autoComplete="username" value={user?.email ?? ""} readOnly hidden />
+          <div className="gm-login-field">
+            <label className="gm-info-label" htmlFor="nova-senha">Nova senha</label>
+            <input
+              id="nova-senha" type="password" required autoComplete="new-password" minLength={8}
+              className="gm-input" value={senha} onChange={(e) => setSenha(e.target.value)}
+              placeholder="Mínimo de 8 caracteres"
+            />
+          </div>
+          <div className="gm-login-field">
+            <label className="gm-info-label" htmlFor="confirmar-senha">Confirmar nova senha</label>
+            <input
+              id="confirmar-senha" type="password" required autoComplete="new-password"
+              className="gm-input" value={confirmacao} onChange={(e) => setConfirmacao(e.target.value)}
+            />
+          </div>
+          <button type="submit" className="gm-btn gm-btn-primary" style={{ width: "100%", justifyContent: "center", marginTop: 6 }} disabled={submitting}>
+            {submitting ? <Loader2 size={14} className="gm-spin" /> : <KeyRound size={14} />}
+            {submitting ? "Salvando..." : "Salvar nova senha e entrar"}
+          </button>
+        </form>
+
+        <button
+          type="button"
+          onClick={cancelarRecuperacao}
+          style={{ display: "block", margin: "14px auto 0", background: "none", border: "none", color: "var(--text-muted)", fontSize: 12.5, cursor: "pointer" }}
+        >
+          Agora não, entrar no CRM
+        </button>
       </div>
     </div>
   );
@@ -2537,6 +2662,470 @@ function NovoClienteModal({ servicosCatalog, onCatalogChanged, onClose, onCreate
 }
 
 /* ------------------------------------------------------------------ */
+/*  PROSPECÇÃO                                                          */
+/*  Empresas que ainda não são leads: lista de ligação/contato ativo.   */
+/*  Carrega os próprios dados (como AdminUsuarios) — não entra no       */
+/*  loadAll do App para não pesar o carregamento inicial.               */
+/* ------------------------------------------------------------------ */
+
+function prospeccaoStatusInfo(chave) {
+  return PROSPECCAO_STATUS.find((s) => s.chave === chave) || { label: chave, cor: "gray" };
+}
+
+function linkWhatsApp(telefone) {
+  const digitos = (telefone || "").replace(/\D/g, "");
+  if (!digitos) return null;
+  return `https://wa.me/${digitos.startsWith("55") ? digitos : `55${digitos}`}`;
+}
+
+function linkExterno(url) {
+  if (!url) return null;
+  return /^https?:\/\//i.test(url) ? url : `https://${url}`;
+}
+
+function linkInstagram(handle) {
+  if (!handle) return null;
+  if (/^https?:\/\//i.test(handle)) return handle;
+  return `https://instagram.com/${handle.replace(/^@/, "")}`;
+}
+
+function fmtCidadeUF(cidade, estado) {
+  if (!cidade) return "—";
+  return estado ? `${cidade} - ${estado}` : cidade;
+}
+
+function Prospeccao({ podeEscrever, onLeadCreated }) {
+  const [itens, setItens] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState(null);
+  const [busca, setBusca] = useState("");
+  const [filtroStatus, setFiltroStatus] = useState("");
+  const [filtroCidade, setFiltroCidade] = useState("");
+  const [filtroSegmento, setFiltroSegmento] = useState("");
+  const [editando, setEditando] = useState(null); // null | "novo" | item
+  const [convertendo, setConvertendo] = useState(null);
+  const [salvandoId, setSalvandoId] = useState(null);
+
+  const carregar = useCallback(async () => {
+    setErro(null);
+    try {
+      setItens(await fetchProspeccoes());
+    } catch (err) {
+      setErro(err.message || "Não foi possível carregar a prospecção.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const cidades = useMemo(() => [...new Set(itens.map((i) => i.cidade).filter(Boolean))].sort(), [itens]);
+  const segmentos = useMemo(() => [...new Set(itens.map((i) => i.segmento).filter(Boolean))].sort(), [itens]);
+
+  const contagemPorStatus = useMemo(() => {
+    const c = {};
+    for (const i of itens) c[i.status] = (c[i.status] || 0) + 1;
+    return c;
+  }, [itens]);
+
+  const filtrados = useMemo(() => {
+    const termo = busca.trim().toLowerCase();
+    return itens.filter((i) =>
+      (!filtroStatus || i.status === filtroStatus) &&
+      (!filtroCidade || i.cidade === filtroCidade) &&
+      (!filtroSegmento || i.segmento === filtroSegmento) &&
+      (!termo || [i.empresa, i.telefone, i.necessidade, i.observacoes].some((v) => (v || "").toLowerCase().includes(termo)))
+    );
+  }, [itens, busca, filtroStatus, filtroCidade, filtroSegmento]);
+
+  const mudarStatus = async (item, status) => {
+    // "Virou lead" precisa criar o lead de verdade — passa pelo modal de conversão
+    if (status === "virou_lead") { setConvertendo(item); return; }
+    setSalvandoId(item.id);
+    try {
+      await atualizarStatusProspeccao(item.id, status);
+      setItens((lista) => lista.map((i) => (i.id === item.id ? { ...i, status } : i)));
+    } catch (err) {
+      alert(err.message || "Não foi possível mudar o status.");
+    } finally {
+      setSalvandoId(null);
+    }
+  };
+
+  const excluir = async (item) => {
+    if (!window.confirm(`Excluir "${item.empresa}" da prospecção?`)) return;
+    try {
+      await excluirProspeccao(item.id);
+      setItens((lista) => lista.filter((i) => i.id !== item.id));
+    } catch (err) {
+      alert(err.message || "Não foi possível excluir.");
+    }
+  };
+
+  const temFiltro = busca || filtroStatus || filtroCidade || filtroSegmento;
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <h1 style={{ fontSize: 22 }}>Prospecção</h1>
+          <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13.5 }}>
+            {itens.length} empresas na lista · {contagemPorStatus.a_contatar || 0} a contatar
+          </p>
+        </div>
+        {podeEscrever && <button className="gm-btn gm-btn-primary" onClick={() => setEditando("novo")}><Plus size={15} /> Nova empresa</button>}
+      </div>
+
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 16 }}>
+        <button
+          className={`gm-badge ${filtroStatus === "" ? "gm-badge-blue" : "gm-badge-gray"}`}
+          style={{ border: "none", cursor: "pointer", padding: "6px 10px" }}
+          onClick={() => setFiltroStatus("")}
+        >
+          Todos · {itens.length}
+        </button>
+        {PROSPECCAO_STATUS.map((s) => (
+          <button
+            key={s.chave}
+            className={`gm-badge ${filtroStatus === s.chave ? `gm-badge-${s.cor === "gray" ? "blue" : s.cor}` : "gm-badge-gray"}`}
+            style={{ border: "none", cursor: "pointer", padding: "6px 10px" }}
+            onClick={() => setFiltroStatus(filtroStatus === s.chave ? "" : s.chave)}
+          >
+            {s.label} · {contagemPorStatus[s.chave] || 0}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+        <input className="gm-input" style={{ flex: "1 1 220px", width: "auto" }} placeholder="Buscar empresa, telefone, observação..." value={busca} onChange={(e) => setBusca(e.target.value)} />
+        <select className="gm-input" style={{ flex: "0 1 180px", width: "auto" }} value={filtroCidade} onChange={(e) => setFiltroCidade(e.target.value)}>
+          <option value="">Todas as cidades</option>
+          {cidades.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select className="gm-input" style={{ flex: "0 1 180px", width: "auto" }} value={filtroSegmento} onChange={(e) => setFiltroSegmento(e.target.value)}>
+          <option value="">Todos os segmentos</option>
+          {segmentos.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+        {temFiltro && (
+          <button className="gm-btn gm-btn-ghost" onClick={() => { setBusca(""); setFiltroStatus(""); setFiltroCidade(""); setFiltroSegmento(""); }}>
+            <X size={14} /> Limpar
+          </button>
+        )}
+      </div>
+
+      {editando && (
+        <ProspeccaoModal
+          item={editando === "novo" ? null : editando}
+          onClose={() => setEditando(null)}
+          onSaved={() => { setEditando(null); carregar(); }}
+        />
+      )}
+
+      {convertendo && (
+        <ConverterProspeccaoModal
+          item={convertendo}
+          onClose={() => setConvertendo(null)}
+          onConverted={(leadId) => { setConvertendo(null); onLeadCreated(leadId); }}
+        />
+      )}
+
+      {loading && (
+        <div className="gm-card" style={{ padding: 20, marginTop: 18, fontSize: 12.5, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 8 }}>
+          <Loader2 size={14} className="gm-spin" /> Carregando prospecção...
+        </div>
+      )}
+
+      {!loading && erro && (
+        <div className="gm-card" style={{ padding: 20, marginTop: 18, fontSize: 12.5, color: "var(--danger)" }}>
+          {erro} <button className="gm-btn gm-btn-ghost" style={{ marginLeft: 8 }} onClick={carregar}>Tentar novamente</button>
+        </div>
+      )}
+
+      {!loading && !erro && filtrados.length === 0 && (
+        <div className="gm-card" style={{ padding: 20, marginTop: 18, fontSize: 12.5, color: "var(--text-faint)" }}>
+          {itens.length === 0 ? "Nenhuma empresa na lista de prospecção ainda." : "Nenhuma empresa com esses filtros."}
+        </div>
+      )}
+
+      {!loading && !erro && filtrados.length > 0 && (
+        <div className="gm-card" style={{ marginTop: 18, overflowX: "auto" }}>
+          <table className="gm-table">
+            <thead>
+              <tr>
+                <th>Empresa</th>
+                <th>Cidade</th>
+                <th>Contato</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtrados.map((i) => {
+                const st = prospeccaoStatusInfo(i.status);
+                const wa = linkWhatsApp(i.telefone);
+                return (
+                  <tr key={i.id}>
+                    <td style={{ minWidth: 220 }}>
+                      <div style={{ fontWeight: 700 }}>{i.empresa}</div>
+                      <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
+                        {[i.segmento, i.porte && (i.porte === "medio" ? "Médio porte" : "Pequeno porte"), i.necessidade].filter(Boolean).join(" · ") || "—"}
+                      </div>
+                      {i.observacoes && (
+                        <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 3, maxWidth: 380 }}>{i.observacoes}</div>
+                      )}
+                    </td>
+                    <td style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>{fmtCidadeUF(i.cidade, i.estado)}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      {i.telefone && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <a href={`tel:${i.telefone.replace(/[^\d+]/g, "")}`} style={{ color: "var(--text)", textDecoration: "none" }}>
+                            <Phone size={12} style={{ verticalAlign: -1 }} /> {i.telefone}
+                          </a>
+                          {wa && <a href={wa} target="_blank" rel="noreferrer" title="Abrir no WhatsApp" style={{ color: "var(--success)" }}><MessageCircle size={14} /></a>}
+                        </div>
+                      )}
+                      <div style={{ display: "flex", gap: 8, marginTop: i.telefone ? 4 : 0 }}>
+                        {i.site && <a href={linkExterno(i.site)} target="_blank" rel="noreferrer" title={i.site} style={{ color: "var(--text-muted)" }}><Globe size={14} /></a>}
+                        {i.instagram && <a href={linkInstagram(i.instagram)} target="_blank" rel="noreferrer" title={i.instagram} style={{ color: "var(--text-muted)" }}><AtSign size={14} /></a>}
+                      </div>
+                      {!i.telefone && !i.site && !i.instagram && <span style={{ color: "var(--text-faint)" }}>—</span>}
+                    </td>
+                    <td>
+                      {podeEscrever && i.status !== "virou_lead" ? (
+                        <select
+                          className="gm-input"
+                          style={{ width: 150, padding: "6px 8px" }}
+                          value={i.status}
+                          disabled={salvandoId === i.id}
+                          onChange={(e) => mudarStatus(i, e.target.value)}
+                        >
+                          {PROSPECCAO_STATUS.map((s) => <option key={s.chave} value={s.chave}>{s.label}</option>)}
+                        </select>
+                      ) : (
+                        <span className={`gm-badge gm-badge-${st.cor}`}>{st.label}</span>
+                      )}
+                    </td>
+                    <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
+                      {i.leadId ? (
+                        <button className="gm-btn gm-btn-ghost" onClick={() => onLeadCreated(i.leadId)}>
+                          <ArrowUpRight size={14} /> Ver lead
+                        </button>
+                      ) : podeEscrever && (
+                        <div style={{ display: "inline-flex", gap: 6 }}>
+                          <button className="gm-btn gm-btn-primary" onClick={() => setConvertendo(i)}>
+                            <UserCheck size={14} /> Converter em lead
+                          </button>
+                          <button className="gm-icon-btn" title="Editar" onClick={() => setEditando(i)}><Pencil size={14} /></button>
+                          <button className="gm-icon-btn" title="Excluir" onClick={() => excluir(i)}><Trash2 size={14} /></button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  MODAL — Nova / editar empresa da prospecção                         */
+/* ------------------------------------------------------------------ */
+
+function ProspeccaoModal({ item, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    empresa: item?.empresa ?? "",
+    segmento: item?.segmento ?? "",
+    porte: item?.porte ?? "",
+    cidade: item?.cidade ?? "",
+    estado: item?.estado ?? "SP",
+    telefone: item?.telefone ?? "",
+    site: item?.site ?? "",
+    instagram: item?.instagram ?? "",
+    necessidade: item?.necessidade ?? "",
+    fonte: item?.fonte ?? "",
+    status: item?.status ?? "a_contatar",
+    observacoes: item?.observacoes ?? "",
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
+
+  const handleSubmit = async () => {
+    if (!form.empresa.trim()) { setError("Preencha ao menos o nome da empresa."); return; }
+    setSubmitting(true);
+    setError(null);
+    try {
+      if (item) await atualizarProspeccao(item.id, form);
+      else await criarProspeccao(form);
+      onSaved();
+    } catch (err) {
+      setError(err.message || "Não foi possível salvar.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(10,23,48,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }}>
+      <div className="gm-card" style={{ width: 560, maxWidth: "100%", maxHeight: "88vh", overflowY: "auto", padding: 26 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+          <div>
+            <p className="gm-eyebrow">Prospecção</p>
+            <h2 style={{ fontSize: 18, marginTop: 4 }}>{item ? "Editar empresa" : "Nova empresa para prospectar"}</h2>
+          </div>
+          <button className="gm-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div className="gm-info-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Empresa *</div>
+              <input className="gm-input" value={form.empresa} onChange={set("empresa")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Segmento</div>
+              <input className="gm-input" value={form.segmento} onChange={set("segmento")} placeholder="Ex.: Advocacia, Clínica..." />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Telefone / WhatsApp</div>
+              <input className="gm-input" value={form.telefone} onChange={set("telefone")} placeholder="(11) 90000-0000" />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Porte</div>
+              <select className="gm-input" value={form.porte} onChange={set("porte")}>
+                <option value="">Não informado</option>
+                <option value="pequeno">Pequeno</option>
+                <option value="medio">Médio</option>
+              </select>
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Cidade</div>
+              <input className="gm-input" value={form.cidade} onChange={set("cidade")} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Estado (UF)</div>
+              <input className="gm-input" maxLength={2} value={form.estado} onChange={(e) => setForm((f) => ({ ...f, estado: e.target.value.toUpperCase() }))} />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Site</div>
+              <input className="gm-input" value={form.site} onChange={set("site")} placeholder="empresa.com.br" />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Instagram</div>
+              <input className="gm-input" value={form.instagram} onChange={set("instagram")} placeholder="@empresa" />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Necessidade</div>
+              <input className="gm-input" value={form.necessidade} onChange={set("necessidade")} placeholder="Ex.: não tem site, Instagram parado..." />
+            </div>
+            <div>
+              <div className="gm-info-label" style={{ marginBottom: 4 }}>Fonte</div>
+              <input className="gm-input" value={form.fonte} onChange={set("fonte")} placeholder="Google Maps, indicação..." />
+            </div>
+            {item && item.status !== "virou_lead" && (
+              <div>
+                <div className="gm-info-label" style={{ marginBottom: 4 }}>Status</div>
+                <select className="gm-input" value={form.status} onChange={set("status")}>
+                  {PROSPECCAO_STATUS.filter((s) => s.chave !== "virou_lead").map((s) => <option key={s.chave} value={s.chave}>{s.label}</option>)}
+                </select>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Observações</div>
+            <textarea className="gm-input" rows={3} value={form.observacoes} onChange={set("observacoes")} style={{ resize: "vertical", fontFamily: "inherit" }} placeholder="Quem atendeu, melhor horário para retornar..." />
+          </div>
+
+          {error && <div style={{ fontSize: 12.5, color: "var(--danger)", background: "var(--danger-tint)", padding: "8px 10px", borderRadius: 8 }}>{error}</div>}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+            <button className="gm-btn gm-btn-ghost" onClick={onClose} disabled={submitting}>Cancelar</button>
+            <button className="gm-btn gm-btn-primary" onClick={handleSubmit} disabled={submitting}>
+              {submitting ? <Loader2 size={14} className="gm-spin" /> : item ? <CheckCircle2 size={14} /> : <Plus size={14} />}
+              {submitting ? "Salvando..." : item ? "Salvar" : "Adicionar"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  MODAL — Converter prospecção em lead                                */
+/* ------------------------------------------------------------------ */
+
+function ConverterProspeccaoModal({ item, onClose, onConverted }) {
+  const [contato, setContato] = useState("");
+  const [valorEstimado, setValorEstimado] = useState("");
+  const [observacoes, setObservacoes] = useState(
+    [item.necessidade && `Necessidade: ${item.necessidade}`, item.observacoes].filter(Boolean).join("\n")
+  );
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleSubmit = async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const leadId = await converterProspeccaoEmLead(item, { contato: contato.trim(), valorEstimado, observacoes });
+      onConverted(leadId);
+    } catch (err) {
+      setError(err.message || "Não foi possível converter em lead.");
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(10,23,48,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }}>
+      <div className="gm-card" style={{ width: 480, maxWidth: "100%", maxHeight: "88vh", overflowY: "auto", padding: 26 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+          <div>
+            <p className="gm-eyebrow">Converter em lead</p>
+            <h2 style={{ fontSize: 18, marginTop: 4 }}>{item.empresa}</h2>
+            <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 4 }}>
+              O lead entra na etapa inicial do funil com telefone, cidade e segmento já preenchidos.
+            </p>
+          </div>
+          <button className="gm-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Nome do contato</div>
+            <input className="gm-input" value={contato} onChange={(e) => setContato(e.target.value)} placeholder="Quem atendeu / decisor (opcional)" />
+          </div>
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Valor estimado (R$)</div>
+            <input className="gm-input" type="number" min="0" step="100" value={valorEstimado} onChange={(e) => setValorEstimado(e.target.value)} />
+          </div>
+          <div>
+            <div className="gm-info-label" style={{ marginBottom: 4 }}>Observações</div>
+            <textarea className="gm-input" rows={4} value={observacoes} onChange={(e) => setObservacoes(e.target.value)} style={{ resize: "vertical", fontFamily: "inherit" }} />
+          </div>
+
+          {error && <div style={{ fontSize: 12.5, color: "var(--danger)", background: "var(--danger-tint)", padding: "8px 10px", borderRadius: 8 }}>{error}</div>}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}>
+            <button className="gm-btn gm-btn-ghost" onClick={onClose} disabled={submitting}>Cancelar</button>
+            <button className="gm-btn gm-btn-primary" onClick={handleSubmit} disabled={submitting}>
+              {submitting ? <Loader2 size={14} className="gm-spin" /> : <UserCheck size={14} />}
+              {submitting ? "Convertendo..." : "Criar lead"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  CONFIGURAÇÕES                                                       */
 /* ------------------------------------------------------------------ */
 
@@ -3169,7 +3758,7 @@ function StagesModal({ stages, onClose, onChanged }) {
 /* ------------------------------------------------------------------ */
 
 export default function App() {
-  const { user, loading: authLoading, signOut } = useAuth();
+  const { user, loading: authLoading, signOut, recuperandoSenha } = useAuth();
 
   const [view, setView] = useState("dashboard");
   const [selectedLeadId, setSelectedLeadId] = useState(null);
@@ -3322,6 +3911,7 @@ export default function App() {
     propostas: podeEscrever(perfil?.papel, "propostas"),
     followups: podeEscrever(perfil?.papel, "followups"),
     pipeline: podeEscrever(perfil?.papel, "pipeline"),
+    prospeccao: podeEscrever(perfil?.papel, "prospeccao"),
   };
 
   if (authLoading) {
@@ -3338,6 +3928,10 @@ export default function App() {
 
   if (!user) {
     return <Login />;
+  }
+
+  if (recuperandoSenha) {
+    return <DefinirNovaSenha />;
   }
 
   if (loading) {
@@ -3419,6 +4013,9 @@ export default function App() {
         <div className="gm-content">
           {view === "dashboard" && (
             <Dashboard leads={leads} clientes={clientes} followUps={followUps} recentActivity={recentActivity} stages={stages} nomeExibicao={perfil?.nome || derivarNomeDoEmail(user.email)} onOpenLead={openLead} goTo={goTo} />
+          )}
+          {view === "prospeccao" && (
+            <Prospeccao podeEscrever={perm.prospeccao} onLeadCreated={handleLeadCreated} />
           )}
           {view === "leads" && (
             <LeadsBoard leads={leads} stages={stages} servicosCatalog={servicosCatalog} onOpenLead={openLead} onLeadCreated={handleLeadCreated} onLeadMoved={handleLeadMoved} onCatalogChanged={handleServicosCatalogChanged} podeEscrever={perm.leads} />

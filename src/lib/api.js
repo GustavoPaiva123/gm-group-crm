@@ -601,6 +601,9 @@ export async function excluirLead(leadId) {
   await supabase.from("timeline_eventos").delete().eq("lead_id", leadId);
   await supabase.from("follow_ups").delete().eq("lead_id", leadId);
   await supabase.from("propostas").delete().eq("lead_id", leadId);
+  // Se o lead veio da Prospecção, solta o vínculo (FK sem cascade) e devolve
+  // a empresa para a lista como "contatado".
+  await supabase.from("prospeccoes").update({ lead_id: null, status: "contatado" }).eq("lead_id", leadId);
 
   const { error } = await supabase.from("leads").delete().eq("id", leadId);
   if (error) throw error;
@@ -618,6 +621,111 @@ export async function atualizarStatusProposta(id, status) {
 export async function excluirProposta(id) {
   const { error } = await supabase.from("propostas").delete().eq("id", id);
   if (error) throw error;
+}
+
+/* ------------------------------------------------------------------ */
+/*  PROSPECÇÃO (empresas a contatar, antes de virarem lead)             */
+/* ------------------------------------------------------------------ */
+
+export const PROSPECCAO_STATUS = [
+  { chave: "a_contatar", label: "A contatar", cor: "blue" },
+  { chave: "contatado", label: "Contatado", cor: "warning" },
+  { chave: "sem_resposta", label: "Sem resposta", cor: "gray" },
+  { chave: "virou_lead", label: "Virou lead", cor: "success" },
+  { chave: "descartado", label: "Descartado", cor: "danger" },
+];
+
+export async function fetchProspeccoes() {
+  const { data, error } = await supabase
+    .from("prospeccoes")
+    .select("*, usuarios(nome)")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+
+  return data.map((row) => ({
+    id: row.id,
+    empresa: row.empresa,
+    segmento: row.segmento ?? "",
+    porte: row.porte ?? "",
+    cidade: row.cidade ?? "",
+    estado: row.estado ?? "",
+    telefone: row.telefone ?? "",
+    site: row.site ?? "",
+    instagram: row.instagram ?? "",
+    necessidade: row.necessidade ?? "",
+    fonte: row.fonte ?? "",
+    status: row.status,
+    observacoes: row.observacoes ?? "",
+    leadId: row.lead_id,
+    criadoPor: row.usuarios?.nome ?? null,
+    criadoEm: fmtData(row.created_at),
+  }));
+}
+
+function payloadProspeccao(campos) {
+  return {
+    empresa: campos.empresa.trim(),
+    segmento: campos.segmento || null,
+    porte: campos.porte || null,
+    cidade: campos.cidade || null,
+    estado: campos.estado || null,
+    telefone: campos.telefone || null,
+    site: campos.site || null,
+    instagram: campos.instagram || null,
+    necessidade: campos.necessidade || null,
+    fonte: campos.fonte || null,
+    status: campos.status || "a_contatar",
+    observacoes: campos.observacoes || null,
+  };
+}
+
+export async function criarProspeccao(campos) {
+  const { data: userRes } = await supabase.auth.getUser();
+  const { error } = await supabase
+    .from("prospeccoes")
+    .insert({ ...payloadProspeccao(campos), criado_por: userRes?.user?.id ?? null });
+  if (error) throw error;
+}
+
+export async function atualizarProspeccao(id, campos) {
+  const { error } = await supabase.from("prospeccoes").update(payloadProspeccao(campos)).eq("id", id);
+  if (error) throw error;
+}
+
+export async function atualizarStatusProspeccao(id, status) {
+  const { error } = await supabase.from("prospeccoes").update({ status }).eq("id", id);
+  if (error) throw error;
+}
+
+export async function excluirProspeccao(id) {
+  const { error } = await supabase.from("prospeccoes").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// Cria o lead na etapa padrão do funil e marca a prospecção como "virou lead",
+// guardando o vínculo para não converter a mesma empresa duas vezes.
+export async function converterProspeccaoEmLead(prospeccao, { contato, valorEstimado, observacoes }) {
+  const leadId = await criarLead({
+    empresa: prospeccao.empresa,
+    contato: contato || prospeccao.empresa,
+    whatsapp: prospeccao.telefone,
+    instagram: prospeccao.instagram,
+    cidade: prospeccao.cidade,
+    estado: prospeccao.estado,
+    segmento: prospeccao.segmento,
+    origem: prospeccao.fonte ? `Prospecção (${prospeccao.fonte})` : "Prospecção",
+    valorEstimado,
+    observacoes,
+    servicoIds: [],
+  });
+
+  const { error } = await supabase
+    .from("prospeccoes")
+    .update({ status: "virou_lead", lead_id: leadId })
+    .eq("id", prospeccao.id);
+  if (error) throw error;
+
+  return leadId;
 }
 
 /* ------------------------------------------------------------------ */
