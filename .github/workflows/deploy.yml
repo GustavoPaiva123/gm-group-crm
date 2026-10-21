@@ -23,9 +23,11 @@ jobs:
 
       - name: Build (Vite)
         run: npm run build
+        # URL e chave anon são públicas (vão no bundle do navegador; quem protege
+        # os dados é o RLS). Ficam como padrão para o build nunca sair sem elas.
         env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://ucrbgtvyexvbjlqmyorj.supabase.co' }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVjcmJndHZ5ZXh2YmpscW15b3JqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQxMzYxNDEsImV4cCI6MjA5OTcxMjE0MX0.BF9vtNx9J1D8kXrSzap0pPR7fGLgWN6n93suvOpC9kM' }}
 
       - name: Publicar no Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
